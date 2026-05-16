@@ -10,15 +10,51 @@ data class NewsItem(
 
 data class WidgetSettings(
     val category: NewsCategory = NewsCategory.Top,
+    val selectedCategories: Set<NewsCategory> = setOf(NewsCategory.Top),
     val displayCount: Int = 4,
+    val displayStyle: DisplayStyle = DisplayStyle.Standard,
     val updateIntervalMinutes: Long = 60,
     val news: List<NewsItem> = emptyList(),
     val newsUpdatedAtMillis: Long = 0L,
     val weatherEnabled: Boolean = true,
+    val weatherLocationMode: WeatherLocationMode = WeatherLocationMode.Current,
+    val locationLabel: String? = null,
+    val fixedLocationQuery: String = "",
+    val fixedLatitude: Double? = null,
+    val fixedLongitude: Double? = null,
     val weatherCode: Int? = null,
     val temperatureCelsius: Double? = null,
     val weatherUpdatedAtMillis: Long = 0L,
+    val lastNewsError: String? = null,
+    val lastWeatherError: String? = null,
+    val readArticleUrls: List<String> = emptyList(),
 )
+
+enum class DisplayStyle(
+    val label: String,
+    val itemFontSp: Int,
+    val headerFontSp: Int,
+    val verticalPaddingDp: Int,
+    val maxItems: Int,
+) {
+    Compact("\u30B3\u30F3\u30D1\u30AF\u30C8", 12, 12, 1, 8),
+    Standard("\u6A19\u6E96", 14, 13, 2, 6),
+    Large("\u5927\u304D\u3081", 16, 14, 3, 4);
+
+    companion object {
+        fun fromName(name: String): DisplayStyle = entries.firstOrNull { it.name == name } ?: Standard
+    }
+}
+
+enum class WeatherLocationMode(val label: String) {
+    Current("\u73FE\u5728\u5730\u3092\u4F7F\u3046"),
+    Fixed("\u56FA\u5B9A\u5730\u57DF\u3092\u4F7F\u3046"),
+    Disabled("\u8868\u793A\u3057\u306A\u3044");
+
+    companion object {
+        fun fromName(name: String): WeatherLocationMode = entries.firstOrNull { it.name == name } ?: Current
+    }
+}
 
 enum class NewsCategory(
     val label: String,

@@ -3,6 +3,8 @@ package com.example.yahoonewswidget.work
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.location.Address
+import android.location.Geocoder
 import androidx.core.content.ContextCompat
 import androidx.glance.appwidget.updateAll
 import androidx.work.Constraints
@@ -14,12 +16,14 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import com.example.yahoonewswidget.data.WeatherLocationMode
 import com.example.yahoonewswidget.data.WidgetPreferences
 import com.example.yahoonewswidget.network.RssClient
 import com.example.yahoonewswidget.network.WeatherClient
 import com.example.yahoonewswidget.widget.YahooNewsWidget
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.tasks.await
@@ -35,38 +39,34 @@ class RefreshWorker(
         val now = System.currentTimeMillis()
 
         withContext(Dispatchers.IO) {
+            val rssClient = RssClient()
             runCatching {
-                RssClient().fetch(settings.category)
+                settings.selectedCategories
+                    .flatMap { category -> rssClient.fetch(category) }
+                    .distinctBy { it.url }
             }.onSuccess { news ->
                 if (news.isNotEmpty()) {
                     preferences.saveNews(news, now)
+                } else {
+                    preferences.saveNewsError("\u30CB\u30E5\u30FC\u30B9\u53D6\u5F97\u5931\u6557")
                 }
+            }.onFailure {
+                preferences.saveNewsError("\u30CB\u30E5\u30FC\u30B9\u53D6\u5F97\u5931\u6557")
             }
 
-            if (settings.weatherEnabled && hasCoarseLocationPermission()) {
+            if (settings.weatherEnabled && settings.weatherLocationMode != WeatherLocationMode.Disabled) {
                 runCatching {
-                    val location = LocationServices
-                        .getFusedLocationProviderClient(applicationContext)
-                        .lastLocation
-                        .await()
-                        ?: LocationServices
-                            .getFusedLocationProviderClient(applicationContext)
-                            .getCurrentLocation(Priority.PRIORITY_BALANCED_POWER_ACCURACY, null)
-                            .await()
-
-                    if (location != null) {
-                        WeatherClient().fetch(location.latitude, location.longitude)
-                    } else {
-                        null
-                    }
-                }.onSuccess { weather ->
-                    if (weather != null) {
-                        preferences.saveWeather(
-                            code = weather.code,
-                            temperatureCelsius = weather.temperatureCelsius,
-                            updatedAtMillis = now,
-                        )
-                    }
+                    resolveWeatherTarget(settings = settings, preferences = preferences)
+                }.onSuccess { target ->
+                    val weather = WeatherClient().fetch(target.latitude, target.longitude)
+                    preferences.saveWeather(
+                        code = weather.code,
+                        temperatureCelsius = weather.temperatureCelsius,
+                        locationLabel = target.label,
+                        updatedAtMillis = now,
+                    )
+                }.onFailure { error ->
+                    preferences.saveWeatherError(error.message ?: "\u5929\u6C17\u53D6\u5F97\u5931\u6557")
                 }
             }
         }
@@ -81,6 +81,90 @@ class RefreshWorker(
             Manifest.permission.ACCESS_COARSE_LOCATION,
         ) == PackageManager.PERMISSION_GRANTED
     }
+
+    private suspend fun resolveWeatherTarget(
+        settings: com.example.yahoonewswidget.data.WidgetSettings,
+        preferences: WidgetPreferences,
+    ): WeatherTarget {
+        return when (settings.weatherLocationMode) {
+            WeatherLocationMode.Current -> resolveCurrentLocation()
+            WeatherLocationMode.Fixed -> resolveFixedLocation(settings, preferences)
+            WeatherLocationMode.Disabled -> error("\u5929\u6C17\u8868\u793A\u306A\u3057")
+        }
+    }
+
+    private suspend fun resolveCurrentLocation(): WeatherTarget {
+        if (!hasCoarseLocationPermission()) {
+            error("\u4F4D\u7F6E\u60C5\u5831\u672A\u8A31\u53EF")
+        }
+        val client = LocationServices.getFusedLocationProviderClient(applicationContext)
+        val location = client.lastLocation.await()
+            ?: client.getCurrentLocation(Priority.PRIORITY_BALANCED_POWER_ACCURACY, null).await()
+            ?: error("\u73FE\u5728\u5730\u53D6\u5F97\u5931\u6557")
+
+        return WeatherTarget(
+            latitude = location.latitude,
+            longitude = location.longitude,
+            label = reverseGeocode(location.latitude, location.longitude),
+        )
+    }
+
+    private suspend fun resolveFixedLocation(
+        settings: com.example.yahoonewswidget.data.WidgetSettings,
+        preferences: WidgetPreferences,
+    ): WeatherTarget {
+        val query = settings.fixedLocationQuery.trim()
+        if (query.isBlank()) {
+            error("\u56FA\u5B9A\u5730\u57DF\u672A\u8A2D\u5B9A")
+        }
+        val latitude = settings.fixedLatitude
+        val longitude = settings.fixedLongitude
+        if (latitude != null && longitude != null) {
+            return WeatherTarget(
+                latitude = latitude,
+                longitude = longitude,
+                label = settings.locationLabel ?: query,
+            )
+        }
+
+        val address = Geocoder(applicationContext, Locale.JAPAN)
+            .getFromLocationName(query, 1)
+            ?.firstOrNull()
+            ?: error("\u56FA\u5B9A\u5730\u57DF\u89E3\u6C7A\u5931\u6557")
+        val label = address.toLocationLabel().ifBlank { query }
+        preferences.saveFixedLocation(
+            query = query,
+            latitude = address.latitude,
+            longitude = address.longitude,
+            label = label,
+        )
+        return WeatherTarget(
+            latitude = address.latitude,
+            longitude = address.longitude,
+            label = label,
+        )
+    }
+
+    private fun reverseGeocode(latitude: Double, longitude: Double): String? {
+        return Geocoder(applicationContext, Locale.JAPAN)
+            .getFromLocation(latitude, longitude, 1)
+            ?.firstOrNull()
+            ?.toLocationLabel()
+            ?.takeIf { it.isNotBlank() }
+    }
+
+    private fun Address.toLocationLabel(): String {
+        return listOf(adminArea, locality ?: subAdminArea)
+            .filterNot { it.isNullOrBlank() }
+            .distinct()
+            .joinToString("")
+    }
+
+    private data class WeatherTarget(
+        val latitude: Double,
+        val longitude: Double,
+        val label: String?,
+    )
 
     companion object {
         private const val UNIQUE_REFRESH_WORK = "yahoo_news_widget_refresh"
@@ -98,7 +182,7 @@ class RefreshWorker(
         }
 
         fun schedulePeriodic(context: Context, intervalMinutes: Long) {
-            val safeIntervalMinutes = intervalMinutes.coerceAtLeast(30L)
+            val safeIntervalMinutes = intervalMinutes.coerceAtLeast(15L)
             val request = PeriodicWorkRequestBuilder<RefreshWorker>(
                 safeIntervalMinutes,
                 TimeUnit.MINUTES,

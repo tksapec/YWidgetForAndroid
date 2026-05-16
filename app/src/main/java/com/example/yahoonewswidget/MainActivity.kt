@@ -9,6 +9,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -18,12 +19,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -38,7 +41,9 @@ import androidx.core.content.ContextCompat
 import androidx.glance.appwidget.updateAll
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
+import com.example.yahoonewswidget.data.DisplayStyle
 import com.example.yahoonewswidget.data.NewsCategory
+import com.example.yahoonewswidget.data.WeatherLocationMode
 import com.example.yahoonewswidget.data.WidgetPreferences
 import com.example.yahoonewswidget.data.WidgetSettings
 import com.example.yahoonewswidget.widget.YahooNewsWidget
@@ -66,9 +71,9 @@ class MainActivity : ComponentActivity() {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     SettingsScreen(
                         settings = settings,
-                        onCategorySelected = { category ->
+                        onCategoriesChanged = { categories ->
                             lifecycleScope.launch {
-                                preferences.updateCategory(category)
+                                preferences.updateSelectedCategories(categories)
                                 RefreshWorker.enqueueImmediate(this@MainActivity)
                             }
                         },
@@ -78,20 +83,33 @@ class MainActivity : ComponentActivity() {
                                 YahooNewsWidget().updateAll(this@MainActivity)
                             }
                         },
+                        onDisplayStyleSelected = { style ->
+                            lifecycleScope.launch {
+                                preferences.updateDisplayStyle(style)
+                                YahooNewsWidget().updateAll(this@MainActivity)
+                            }
+                        },
                         onIntervalSelected = { minutes ->
                             lifecycleScope.launch {
                                 preferences.updateInterval(minutes)
                                 RefreshWorker.schedulePeriodic(this@MainActivity, minutes)
                             }
                         },
-                        onWeatherEnabledChanged = { enabled ->
+                        onWeatherLocationModeSelected = { mode ->
                             lifecycleScope.launch {
-                                preferences.updateWeatherEnabled(enabled)
-                                if (enabled) {
-                                    RefreshWorker.enqueueImmediate(this@MainActivity)
-                                } else {
+                                preferences.updateWeatherLocationMode(mode)
+                                if (mode == WeatherLocationMode.Disabled) {
                                     YahooNewsWidget().updateAll(this@MainActivity)
+                                } else {
+                                    RefreshWorker.enqueueImmediate(this@MainActivity)
                                 }
+                            }
+                        },
+                        onFixedLocationSaved = { query ->
+                            lifecycleScope.launch {
+                                preferences.updateFixedLocationQuery(query)
+                                preferences.updateWeatherLocationMode(WeatherLocationMode.Fixed)
+                                RefreshWorker.enqueueImmediate(this@MainActivity)
                             }
                         },
                     )
@@ -104,12 +122,17 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun SettingsScreen(
     settings: WidgetSettings,
-    onCategorySelected: (NewsCategory) -> Unit,
+    onCategoriesChanged: (Set<NewsCategory>) -> Unit,
     onDisplayCountSelected: (Int) -> Unit,
+    onDisplayStyleSelected: (DisplayStyle) -> Unit,
     onIntervalSelected: (Long) -> Unit,
-    onWeatherEnabledChanged: (Boolean) -> Unit,
+    onWeatherLocationModeSelected: (WeatherLocationMode) -> Unit,
+    onFixedLocationSaved: (String) -> Unit,
 ) {
     val context = LocalContext.current
+    var fixedLocationInput by remember(settings.fixedLocationQuery) {
+        mutableStateOf(settings.fixedLocationQuery)
+    }
     var locationGranted by remember {
         mutableStateOf(
             ContextCompat.checkSelfPermission(
@@ -122,7 +145,9 @@ private fun SettingsScreen(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
         locationGranted = granted
-        if (granted) onWeatherEnabledChanged(true)
+        if (granted && settings.weatherLocationMode == WeatherLocationMode.Current) {
+            onWeatherLocationModeSelected(WeatherLocationMode.Current)
+        }
     }
 
     Column(
@@ -137,10 +162,17 @@ private fun SettingsScreen(
             style = MaterialTheme.typography.titleLarge,
         )
 
-        SettingRow(label = "\u8868\u793A\u30AB\u30C6\u30B4\u30EA") {
-            CategoryMenu(
-                selected = settings.category,
-                onSelected = onCategorySelected,
+        SettingBlock(label = "\u8868\u793A\u30AB\u30C6\u30B4\u30EA") {
+            CategorySelector(
+                selected = settings.selectedCategories,
+                onChanged = onCategoriesChanged,
+            )
+        }
+
+        SettingRow(label = "\u8868\u793A\u30B9\u30BF\u30A4\u30EB") {
+            DisplayStyleMenu(
+                selected = settings.displayStyle,
+                onSelected = onDisplayStyleSelected,
             )
         }
 
@@ -158,11 +190,11 @@ private fun SettingsScreen(
             )
         }
 
-        SettingRow(label = "\u5929\u6C17\u8868\u793A") {
-            Switch(
-                checked = settings.weatherEnabled,
-                onCheckedChange = onWeatherEnabledChanged,
-                enabled = locationGranted,
+        SettingBlock(label = "\u5929\u6C17\u5730\u57DF") {
+            WeatherLocationSelector(
+                selected = settings.weatherLocationMode,
+                locationGranted = locationGranted,
+                onSelected = onWeatherLocationModeSelected,
             )
         }
 
@@ -172,11 +204,47 @@ private fun SettingsScreen(
             }
         }
 
+        SettingBlock(label = "\u56FA\u5B9A\u5730\u57DF") {
+            OutlinedTextField(
+                value = fixedLocationInput,
+                onValueChange = { fixedLocationInput = it },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                label = { Text("\u4F8B: \u6771\u4EAC\u90FD\u65B0\u5BBF\u533A") },
+            )
+            Button(
+                onClick = { onFixedLocationSaved(fixedLocationInput) },
+                enabled = fixedLocationInput.isNotBlank(),
+            ) {
+                Text("\u4FDD\u5B58\u3057\u3066\u66F4\u65B0")
+            }
+            settings.locationLabel?.takeIf { it.isNotBlank() }?.let { label ->
+                Text(
+                    text = "\u8868\u793A\u4E2D: $label",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
+
         Spacer(modifier = Modifier.height(8.dp))
         Text(
-            text = "\u4F4D\u7F6E\u60C5\u5831\u306F\u304A\u304A\u3088\u305D\u306E\u73FE\u5728\u5730\u306E\u307F\u4F7F\u7528\u3057\u307E\u3059\u3002\u30A6\u30A3\u30B8\u30A7\u30C3\u30C8\u304B\u3089\u6A29\u9650\u8981\u6C42\u306F\u884C\u3044\u307E\u305B\u3093\u3002",
+            text = "\u66F4\u65B0\u9593\u9694\u306E10\u5206\u306F\u8A2D\u5B9A\u3068\u3057\u3066\u4FDD\u5B58\u3057\u307E\u3059\u304C\u3001Android\u306E\u5236\u7D04\u306B\u3088\u308A\u5B9A\u671F\u5B9F\u884C\u306F15\u5206\u4EE5\u4E0A\u3067\u767B\u9332\u3055\u308C\u307E\u3059\u3002",
             style = MaterialTheme.typography.bodySmall,
         )
+    }
+}
+
+@Composable
+private fun SettingBlock(
+    label: String,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(text = label, style = MaterialTheme.typography.bodyLarge)
+        content()
     }
 }
 
@@ -196,21 +264,72 @@ private fun SettingRow(
 }
 
 @Composable
-private fun CategoryMenu(
-    selected: NewsCategory,
-    onSelected: (NewsCategory) -> Unit,
+private fun CategorySelector(
+    selected: Set<NewsCategory>,
+    onChanged: (Set<NewsCategory>) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        NewsCategory.entries.forEach { category ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Checkbox(
+                    checked = category in selected,
+                    onCheckedChange = { checked ->
+                        val next = if (checked) {
+                            selected + category
+                        } else {
+                            selected - category
+                        }
+                        if (next.isNotEmpty()) onChanged(next)
+                    },
+                )
+                Text(category.label)
+            }
+        }
+    }
+}
+
+@Composable
+private fun WeatherLocationSelector(
+    selected: WeatherLocationMode,
+    locationGranted: Boolean,
+    onSelected: (WeatherLocationMode) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        WeatherLocationMode.entries.forEach { mode ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                RadioButton(
+                    selected = selected == mode,
+                    onClick = { onSelected(mode) },
+                    enabled = mode != WeatherLocationMode.Current || locationGranted,
+                )
+                Text(mode.label)
+            }
+        }
+    }
+}
+
+@Composable
+private fun DisplayStyleMenu(
+    selected: DisplayStyle,
+    onSelected: (DisplayStyle) -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
     OutlinedButton(onClick = { expanded = true }) {
         Text(selected.label)
     }
     DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-        NewsCategory.entries.forEach { category ->
+        DisplayStyle.entries.forEach { style ->
             DropdownMenuItem(
-                text = { Text(category.label) },
+                text = { Text(style.label) },
                 onClick = {
                     expanded = false
-                    onSelected(category)
+                    onSelected(style)
                 },
             )
         }
@@ -245,10 +364,10 @@ private fun IntervalMenu(
     onSelected: (Long) -> Unit,
 ) {
     val intervals = listOf(
+        10L to "10\u5206",
+        15L to "15\u5206",
         30L to "30\u5206",
         60L to "1\u6642\u9593",
-        180L to "3\u6642\u9593",
-        360L to "6\u6642\u9593",
     )
     val selectedLabel = intervals.firstOrNull { it.first == selected }?.second ?: "1\u6642\u9593"
     var expanded by remember { mutableStateOf(false) }

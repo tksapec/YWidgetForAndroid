@@ -21,6 +21,7 @@ import androidx.glance.appwidget.cornerRadius
 import androidx.glance.appwidget.lazy.LazyColumn
 import androidx.glance.appwidget.lazy.items
 import androidx.glance.appwidget.provideContent
+import androidx.glance.appwidget.updateAll
 import androidx.glance.background
 import androidx.glance.layout.Alignment
 import androidx.glance.layout.Box
@@ -42,6 +43,7 @@ import androidx.glance.unit.ColorProvider
 import com.example.yahoonewswidget.data.NewsItem
 import com.example.yahoonewswidget.data.WidgetPreferences
 import com.example.yahoonewswidget.data.WidgetSettings
+import com.example.yahoonewswidget.data.WeatherLocationMode
 import com.example.yahoonewswidget.data.weatherIconForCode
 import com.example.yahoonewswidget.work.RefreshWorker
 import java.text.SimpleDateFormat
@@ -61,27 +63,28 @@ class YahooNewsWidget : GlanceAppWidget() {
 
 @Composable
 private fun YahooNewsWidgetContent(settings: WidgetSettings) {
+    val style = settings.displayStyle
     Column(
         modifier = GlanceModifier
             .fillMaxSize()
             .background(ColorProvider(Color(0xFF151515)))
             .cornerRadius(16.dp)
-            .padding(horizontal = 12.dp, vertical = 10.dp),
+            .padding(horizontal = 12.dp, vertical = (8 + style.verticalPaddingDp).dp),
     ) {
         Header(settings)
         Spacer(GlanceModifier.height(6.dp))
         Divider()
         Spacer(GlanceModifier.height(4.dp))
         NewsList(
-            news = settings.news.take(settings.displayCount),
+            settings = settings,
         )
         Spacer(GlanceModifier.height(4.dp))
         Divider()
         Spacer(GlanceModifier.height(4.dp))
         Text(
-            text = "\u66F4\u65B0: ${formatUpdatedAt(settings.newsUpdatedAtMillis)}",
+            text = statusText(settings),
             style = TextStyle(
-                color = ColorProvider(Color(0xFFB8B8B8)),
+                color = ColorProvider(if (settings.lastNewsError == null) Color(0xFFB8B8B8) else Color(0xFFFFC268)),
                 fontSize = 11.sp,
             ),
             maxLines = 1,
@@ -115,12 +118,15 @@ private fun Header(settings: WidgetSettings) {
 
 @Composable
 private fun RowScope.HeaderTitle(settings: WidgetSettings) {
+    val categories = settings.selectedCategories.joinToString("/") { it.label }
     Text(
-        text = "Yahoo!\u30CB\u30E5\u30FC\u30B9  ${settings.category.label}",
-        modifier = GlanceModifier.defaultWeight(),
+        text = "Yahoo!\u30CB\u30E5\u30FC\u30B9  $categories",
+        modifier = GlanceModifier
+            .defaultWeight()
+            .clickable(openUrlAction(YAHOO_TOP_URL)),
         style = TextStyle(
             color = ColorProvider(Color.White),
-            fontSize = 13.sp,
+            fontSize = settings.displayStyle.headerFontSp.sp,
             fontWeight = FontWeight.Bold,
         ),
         maxLines = 1,
@@ -131,10 +137,28 @@ private fun RowScope.HeaderTitle(settings: WidgetSettings) {
 private fun WeatherText(settings: WidgetSettings) {
     val code = settings.weatherCode
     val temperature = settings.temperatureCelsius
-    if (!settings.weatherEnabled || code == null || temperature == null) return
+    if (settings.weatherLocationMode == WeatherLocationMode.Disabled) return
+
+    val error = settings.lastWeatherError
+    if (!settings.weatherEnabled || code == null || temperature == null) {
+        if (error != null) {
+            Text(
+                text = error,
+                modifier = GlanceModifier.padding(end = 8.dp),
+                style = TextStyle(
+                    color = ColorProvider(Color(0xFFFFC268)),
+                    fontSize = 11.sp,
+                ),
+                maxLines = 1,
+            )
+        }
+        return
+    }
+
+    val location = settings.locationLabel?.takeIf { it.isNotBlank() }?.let { "$it " }.orEmpty()
 
     Text(
-        text = "${weatherIconForCode(code)} ${temperature.toInt()}\u2103",
+        text = "$location${weatherIconForCode(code)} ${temperature.toInt()}\u2103",
         modifier = GlanceModifier.padding(end = 8.dp),
         style = TextStyle(
             color = ColorProvider(Color(0xFFE4E4E4)),
@@ -145,8 +169,9 @@ private fun WeatherText(settings: WidgetSettings) {
 }
 
 @Composable
-private fun ColumnScope.NewsList(news: List<NewsItem>) {
+private fun ColumnScope.NewsList(settings: WidgetSettings) {
     val modifier = GlanceModifier.defaultWeight().fillMaxWidth()
+    val news = settings.news.take(minOf(settings.displayCount, settings.displayStyle.maxItems))
 
     if (news.isEmpty()) {
         Box(
@@ -167,15 +192,16 @@ private fun ColumnScope.NewsList(news: List<NewsItem>) {
 
     LazyColumn(modifier = modifier) {
         items(news) { item ->
+            val isRead = item.url in settings.readArticleUrls
             Text(
                 text = "\u30FB${item.title}",
                 modifier = GlanceModifier
                     .fillMaxWidth()
-                    .padding(vertical = 2.dp)
+                    .padding(vertical = settings.displayStyle.verticalPaddingDp.dp)
                     .clickable(openUrlAction(item.url)),
                 style = TextStyle(
-                    color = ColorProvider(Color(0xFFF2F2F2)),
-                    fontSize = 12.sp,
+                    color = ColorProvider(if (isRead) Color(0xFF8D8D8D) else Color(0xFFF2F2F2)),
+                    fontSize = settings.displayStyle.itemFontSp.sp,
                 ),
                 maxLines = 1,
             )
@@ -194,10 +220,16 @@ private fun Divider() {
 }
 
 private val UrlParameterKey = ActionParameters.Key<String>("url")
+private const val YAHOO_TOP_URL = "https://www.yahoo.co.jp/"
 
 private fun openUrlAction(url: String) = actionRunCallback<OpenUrlAction>(
     actionParametersOf(UrlParameterKey to url),
 )
+
+private fun statusText(settings: WidgetSettings): String {
+    val updatedAt = "\u66F4\u65B0: ${formatUpdatedAt(settings.newsUpdatedAtMillis)}"
+    return settings.lastNewsError?.let { "$updatedAt  $it" } ?: updatedAt
+}
 
 private fun formatUpdatedAt(updatedAtMillis: Long): String {
     if (updatedAtMillis <= 0L) return "--:--"
@@ -221,6 +253,10 @@ class OpenUrlAction : ActionCallback {
         parameters: ActionParameters,
     ) {
         val url = parameters[UrlParameterKey] ?: return
+        if (url != YAHOO_TOP_URL) {
+            WidgetPreferences(context).markArticleRead(url)
+            YahooNewsWidget().updateAll(context)
+        }
         context.startActivity(
             Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
