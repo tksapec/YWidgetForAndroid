@@ -32,10 +32,6 @@ class WidgetPreferences(private val context: Context) {
         val news = runCatching {
             if (newsJson.isBlank()) emptyList() else json.decodeFromString<List<NewsItem>>(newsJson)
         }.getOrDefault(emptyList())
-        val readArticleUrls = runCatching {
-            val value = preferences[Keys.readArticleUrlsJson].orEmpty()
-            if (value.isBlank()) emptyList() else json.decodeFromString<List<String>>(value)
-        }.getOrDefault(emptyList())
 
         WidgetSettings(
             category = category,
@@ -58,7 +54,6 @@ class WidgetPreferences(private val context: Context) {
             weatherUpdatedAtMillis = preferences[Keys.weatherUpdatedAtMillis] ?: 0L,
             lastNewsError = preferences[Keys.lastNewsError],
             lastWeatherError = preferences[Keys.lastWeatherError],
-            readArticleUrls = readArticleUrls,
         )
     }
 
@@ -153,17 +148,6 @@ class WidgetPreferences(private val context: Context) {
         context.widgetDataStore.edit { it[Keys.lastWeatherError] = message }
     }
 
-    suspend fun markArticleRead(url: String) {
-        context.widgetDataStore.edit { preferences ->
-            val current = runCatching {
-                val value = preferences[Keys.readArticleUrlsJson].orEmpty()
-                if (value.isBlank()) emptyList() else json.decodeFromString<List<String>>(value)
-            }.getOrDefault(emptyList())
-            val next = (listOf(url) + current.filterNot { it == url }).take(200)
-            preferences[Keys.readArticleUrlsJson] = json.encodeToString(next)
-        }
-    }
-
     private fun decodeCategories(value: String?, fallback: NewsCategory): Set<NewsCategory> {
         val categories = value
             ?.split(",")
@@ -196,6 +180,5 @@ class WidgetPreferences(private val context: Context) {
         val weatherUpdatedAtMillis = longPreferencesKey("weather_updated_at_millis")
         val lastNewsError = stringPreferencesKey("last_news_error")
         val lastWeatherError = stringPreferencesKey("last_weather_error")
-        val readArticleUrlsJson = stringPreferencesKey("read_article_urls_json")
     }
 }

@@ -27,7 +27,6 @@ data class WidgetSettings(
     val weatherUpdatedAtMillis: Long = 0L,
     val lastNewsError: String? = null,
     val lastWeatherError: String? = null,
-    val readArticleUrls: List<String> = emptyList(),
 )
 
 enum class DisplayStyle(
@@ -35,11 +34,10 @@ enum class DisplayStyle(
     val itemFontSp: Int,
     val headerFontSp: Int,
     val verticalPaddingDp: Int,
-    val maxItems: Int,
 ) {
-    Compact("\u30B3\u30F3\u30D1\u30AF\u30C8", 12, 12, 1, 8),
-    Standard("\u6A19\u6E96", 14, 13, 2, 6),
-    Large("\u5927\u304D\u3081", 16, 14, 3, 4);
+    Compact("\u30B3\u30F3\u30D1\u30AF\u30C8", 12, 12, 1),
+    Standard("\u6A19\u6E96", 14, 13, 2),
+    Large("\u5927\u304D\u3081", 16, 14, 3);
 
     companion object {
         fun fromName(name: String): DisplayStyle = entries.firstOrNull { it.name == name } ?: Standard

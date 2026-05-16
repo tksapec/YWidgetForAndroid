@@ -21,7 +21,6 @@ import androidx.glance.appwidget.cornerRadius
 import androidx.glance.appwidget.lazy.LazyColumn
 import androidx.glance.appwidget.lazy.items
 import androidx.glance.appwidget.provideContent
-import androidx.glance.appwidget.updateAll
 import androidx.glance.background
 import androidx.glance.layout.Alignment
 import androidx.glance.layout.Box
@@ -46,6 +45,7 @@ import com.example.yahoonewswidget.data.WidgetSettings
 import com.example.yahoonewswidget.data.WeatherLocationMode
 import com.example.yahoonewswidget.data.weatherIconForCode
 import com.example.yahoonewswidget.work.RefreshWorker
+import java.util.Calendar
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -72,23 +72,13 @@ private fun YahooNewsWidgetContent(settings: WidgetSettings) {
             .padding(horizontal = 12.dp, vertical = (8 + style.verticalPaddingDp).dp),
     ) {
         Header(settings)
-        Spacer(GlanceModifier.height(6.dp))
-        Divider()
         Spacer(GlanceModifier.height(4.dp))
+        Divider()
+        Spacer(GlanceModifier.height(2.dp))
         NewsList(
             settings = settings,
         )
-        Spacer(GlanceModifier.height(4.dp))
-        Divider()
-        Spacer(GlanceModifier.height(4.dp))
-        Text(
-            text = statusText(settings),
-            style = TextStyle(
-                color = ColorProvider(if (settings.lastNewsError == null) Color(0xFFB8B8B8) else Color(0xFFFFC268)),
-                fontSize = 11.sp,
-            ),
-            maxLines = 1,
-        )
+        BottomActions()
     }
 }
 
@@ -99,6 +89,7 @@ private fun Header(settings: WidgetSettings) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         HeaderTitle(settings)
+        HeaderStatus(settings)
         WeatherText(settings)
 
         Text(
@@ -128,6 +119,19 @@ private fun RowScope.HeaderTitle(settings: WidgetSettings) {
             color = ColorProvider(Color.White),
             fontSize = settings.displayStyle.headerFontSp.sp,
             fontWeight = FontWeight.Bold,
+        ),
+        maxLines = 1,
+    )
+}
+
+@Composable
+private fun HeaderStatus(settings: WidgetSettings) {
+    Text(
+        text = statusText(settings),
+        modifier = GlanceModifier.padding(end = 8.dp),
+        style = TextStyle(
+            color = ColorProvider(if (settings.lastNewsError == null) Color(0xFFB8B8B8) else Color(0xFFFFC268)),
+            fontSize = 11.sp,
         ),
         maxLines = 1,
     )
@@ -169,9 +173,35 @@ private fun WeatherText(settings: WidgetSettings) {
 }
 
 @Composable
+private fun BottomActions() {
+    Row(
+        modifier = GlanceModifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Spacer(GlanceModifier.defaultWeight())
+        TodayButton()
+    }
+}
+
+@Composable
+private fun TodayButton() {
+    Text(
+        text = "\u4ECA\u65E5\u306F\u4F55\u306E\u65E5",
+        modifier = GlanceModifier
+            .padding(top = 2.dp)
+            .clickable(actionRunCallback<OpenTodayWikipediaAction>()),
+        style = TextStyle(
+            color = ColorProvider(Color(0xFFE4E4E4)),
+            fontSize = 11.sp,
+        ),
+        maxLines = 1,
+    )
+}
+
+@Composable
 private fun ColumnScope.NewsList(settings: WidgetSettings) {
     val modifier = GlanceModifier.defaultWeight().fillMaxWidth()
-    val news = settings.news.take(minOf(settings.displayCount, settings.displayStyle.maxItems))
+    val news = settings.news.take(settings.displayCount)
 
     if (news.isEmpty()) {
         Box(
@@ -192,7 +222,6 @@ private fun ColumnScope.NewsList(settings: WidgetSettings) {
 
     LazyColumn(modifier = modifier) {
         items(news) { item ->
-            val isRead = item.url in settings.readArticleUrls
             Text(
                 text = "\u30FB${item.title}",
                 modifier = GlanceModifier
@@ -200,7 +229,7 @@ private fun ColumnScope.NewsList(settings: WidgetSettings) {
                     .padding(vertical = settings.displayStyle.verticalPaddingDp.dp)
                     .clickable(openUrlAction(item.url)),
                 style = TextStyle(
-                    color = ColorProvider(if (isRead) Color(0xFF8D8D8D) else Color(0xFFF2F2F2)),
+                    color = ColorProvider(Color(0xFFF2F2F2)),
                     fontSize = settings.displayStyle.itemFontSp.sp,
                 ),
                 maxLines = 1,
@@ -236,6 +265,17 @@ private fun formatUpdatedAt(updatedAtMillis: Long): String {
     return SimpleDateFormat("HH:mm", Locale.JAPAN).format(Date(updatedAtMillis))
 }
 
+private fun todayWikipediaUri(): Uri {
+    val today = Calendar.getInstance(Locale.JAPAN)
+    val title = "${today.get(Calendar.MONTH) + 1}\u6708${today.get(Calendar.DAY_OF_MONTH)}\u65E5"
+    return Uri.Builder()
+        .scheme("https")
+        .authority("ja.wikipedia.org")
+        .appendPath("wiki")
+        .appendPath(title)
+        .build()
+}
+
 class RefreshAction : ActionCallback {
     override suspend fun onAction(
         context: Context,
@@ -246,6 +286,20 @@ class RefreshAction : ActionCallback {
     }
 }
 
+class OpenTodayWikipediaAction : ActionCallback {
+    override suspend fun onAction(
+        context: Context,
+        glanceId: GlanceId,
+        parameters: ActionParameters,
+    ) {
+        context.startActivity(
+            Intent(Intent.ACTION_VIEW, todayWikipediaUri()).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            },
+        )
+    }
+}
+
 class OpenUrlAction : ActionCallback {
     override suspend fun onAction(
         context: Context,
@@ -253,10 +307,6 @@ class OpenUrlAction : ActionCallback {
         parameters: ActionParameters,
     ) {
         val url = parameters[UrlParameterKey] ?: return
-        if (url != YAHOO_TOP_URL) {
-            WidgetPreferences(context).markArticleRead(url)
-            YahooNewsWidget().updateAll(context)
-        }
         context.startActivity(
             Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
