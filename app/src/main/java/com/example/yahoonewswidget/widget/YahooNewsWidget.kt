@@ -43,6 +43,7 @@ import androidx.glance.text.Text
 import androidx.glance.text.TextAlign
 import androidx.glance.text.TextStyle
 import androidx.glance.unit.ColorProvider
+import com.example.yahoonewswidget.data.LauncherAppShortcut
 import com.example.yahoonewswidget.data.NewsItem
 import com.example.yahoonewswidget.data.WidgetPreferences
 import com.example.yahoonewswidget.data.WidgetSettings
@@ -85,7 +86,7 @@ private fun YahooNewsWidgetContent(settings: WidgetSettings) {
         NewsList(
             settings = settings,
         )
-        BottomActions()
+        BottomActions(settings)
     }
 }
 
@@ -96,7 +97,6 @@ private fun Header(settings: WidgetSettings) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         HeaderTitle(settings)
-        HeaderStatus(settings)
         WeatherText(settings)
 
         Text(
@@ -121,24 +121,11 @@ private fun RowScope.HeaderTitle(settings: WidgetSettings) {
         text = "Yahoo!\u30CB\u30E5\u30FC\u30B9  $categories",
         modifier = GlanceModifier
             .defaultWeight()
-            .clickable(openUrlAction(YAHOO_TOP_URL)),
+            .clickable(actionRunCallback<OpenYahooAppAction>()),
         style = TextStyle(
             color = ColorProvider(Color.White),
             fontSize = settings.displayStyle.headerFontSp.sp,
             fontWeight = FontWeight.Bold,
-        ),
-        maxLines = 1,
-    )
-}
-
-@Composable
-private fun HeaderStatus(settings: WidgetSettings) {
-    Text(
-        text = statusText(settings),
-        modifier = GlanceModifier.padding(end = 8.dp),
-        style = TextStyle(
-            color = ColorProvider(if (settings.lastNewsError == null) Color(0xFFB8B8B8) else Color(0xFFFFC268)),
-            fontSize = 11.sp,
         ),
         maxLines = 1,
     )
@@ -180,24 +167,37 @@ private fun WeatherText(settings: WidgetSettings) {
 }
 
 @Composable
-private fun BottomActions() {
+private fun BottomActions(settings: WidgetSettings) {
     Row(
         modifier = GlanceModifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        YahooButton()
-        Spacer(GlanceModifier.defaultWeight())
+        settings.launcherApps.take(3).forEach { app ->
+            LauncherAppButton(app)
+        }
+        Text(
+            text = statusText(settings),
+            modifier = GlanceModifier
+                .defaultWeight()
+                .padding(horizontal = 6.dp),
+            style = TextStyle(
+                color = ColorProvider(if (settings.lastNewsError == null) Color(0xFFB8B8B8) else Color(0xFFFFC268)),
+                fontSize = 10.sp,
+                textAlign = TextAlign.End,
+            ),
+            maxLines = 1,
+        )
         TodayButton()
     }
 }
 
 @Composable
-private fun YahooButton() {
+private fun LauncherAppButton(app: LauncherAppShortcut) {
     Text(
-        text = "Yahoo!",
+        text = app.displayName.take(6),
         modifier = GlanceModifier
-            .padding(top = 2.dp)
-            .clickable(actionRunCallback<OpenYahooAppAction>()),
+            .padding(top = 2.dp, end = 6.dp)
+            .clickable(openLauncherAppAction(app.packageName)),
         style = TextStyle(
             color = ColorProvider(Color(0xFFE4E4E4)),
             fontSize = 11.sp,
@@ -273,11 +273,16 @@ private fun Divider() {
 }
 
 private val UrlParameterKey = ActionParameters.Key<String>("url")
+private val PackageNameParameterKey = ActionParameters.Key<String>("package_name")
 private const val YAHOO_APP_PACKAGE = "jp.co.yahoo.android.yjtop"
 private const val YAHOO_TOP_URL = "https://www.yahoo.co.jp/"
 
 private fun openUrlAction(url: String) = actionRunCallback<OpenUrlAction>(
     actionParametersOf(UrlParameterKey to url),
+)
+
+private fun openLauncherAppAction(packageName: String) = actionRunCallback<OpenLauncherAppAction>(
+    actionParametersOf(PackageNameParameterKey to packageName),
 )
 
 private fun statusText(settings: WidgetSettings): String {
@@ -347,6 +352,19 @@ class OpenYahooAppAction : ActionCallback {
         if (!context.tryStartActivity(launchIntent)) {
             context.openYahooUrlWithFallback(YAHOO_TOP_URL)
         }
+    }
+}
+
+class OpenLauncherAppAction : ActionCallback {
+    override suspend fun onAction(
+        context: Context,
+        glanceId: GlanceId,
+        parameters: ActionParameters,
+    ) {
+        val packageName = parameters[PackageNameParameterKey] ?: return
+        val launchIntent = context.packageManager.getLaunchIntentForPackage(packageName)
+            ?.apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+        context.tryStartActivity(launchIntent)
     }
 }
 

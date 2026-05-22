@@ -57,6 +57,7 @@ class RefreshWorker(
                     preferences.saveNews(news, now)
                 } else {
                     preferences.saveNewsError("\u30CB\u30E5\u30FC\u30B9\u53D6\u5F97\u5931\u6557")
+                    retryNeeded = true
                 }
             }.onFailure { error ->
                 preferences.saveNewsError("\u30CB\u30E5\u30FC\u30B9\u53D6\u5F97\u5931\u6557")
@@ -67,16 +68,21 @@ class RefreshWorker(
                 runCatching {
                     resolveWeatherTarget(settings = settings, preferences = preferences)
                 }.onSuccess { target ->
-                    val weather = WeatherClient().fetch(target.latitude, target.longitude)
-                    preferences.saveWeather(
-                        code = weather.code,
-                        temperatureCelsius = weather.temperatureCelsius,
-                        locationLabel = target.label,
-                        updatedAtMillis = now,
-                    )
+                    runCatching {
+                        WeatherClient().fetch(target.latitude, target.longitude)
+                    }.onSuccess { weather ->
+                        preferences.saveWeather(
+                            code = weather.code,
+                            temperatureCelsius = weather.temperatureCelsius,
+                            locationLabel = target.label,
+                            updatedAtMillis = now,
+                        )
+                    }.onFailure { error ->
+                        preferences.saveWeatherError(error.message ?: "\u5929\u6C17\u53D6\u5F97\u5931\u6557")
+                        if (error.isTransientFailure()) retryNeeded = true
+                    }
                 }.onFailure { error ->
                     preferences.saveWeatherError(error.message ?: "\u5929\u6C17\u53D6\u5F97\u5931\u6557")
-                    if (error.isTransientFailure()) retryNeeded = true
                 }
             }
         }

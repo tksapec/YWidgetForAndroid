@@ -27,6 +27,13 @@ data class WidgetSettings(
     val weatherUpdatedAtMillis: Long = 0L,
     val lastNewsError: String? = null,
     val lastWeatherError: String? = null,
+    val launcherApps: List<LauncherAppShortcut> = emptyList(),
+)
+
+@Serializable
+data class LauncherAppShortcut(
+    val displayName: String,
+    val packageName: String,
 )
 
 enum class DisplayStyle(

@@ -32,6 +32,14 @@ class WidgetPreferences(private val context: Context) {
         val news = runCatching {
             if (newsJson.isBlank()) emptyList() else json.decodeFromString<List<NewsItem>>(newsJson)
         }.getOrDefault(emptyList())
+        val launcherAppsJson = preferences[Keys.launcherAppsJson].orEmpty()
+        val launcherApps = runCatching {
+            if (launcherAppsJson.isBlank()) {
+                emptyList()
+            } else {
+                json.decodeFromString<List<LauncherAppShortcut>>(launcherAppsJson)
+            }
+        }.getOrDefault(emptyList())
 
         WidgetSettings(
             category = category,
@@ -54,6 +62,7 @@ class WidgetPreferences(private val context: Context) {
             weatherUpdatedAtMillis = preferences[Keys.weatherUpdatedAtMillis] ?: 0L,
             lastNewsError = preferences[Keys.lastNewsError],
             lastWeatherError = preferences[Keys.lastWeatherError],
+            launcherApps = normalizeLauncherApps(launcherApps),
         )
     }
 
@@ -148,6 +157,12 @@ class WidgetPreferences(private val context: Context) {
         context.widgetDataStore.edit { it[Keys.lastWeatherError] = message }
     }
 
+    suspend fun updateLauncherApps(apps: List<LauncherAppShortcut>) {
+        context.widgetDataStore.edit {
+            it[Keys.launcherAppsJson] = json.encodeToString(normalizeLauncherApps(apps))
+        }
+    }
+
     private fun decodeCategories(value: String?, fallback: NewsCategory): Set<NewsCategory> {
         val categories = value
             ?.split(",")
@@ -159,6 +174,13 @@ class WidgetPreferences(private val context: Context) {
 
     private fun orderedCategories(categories: Set<NewsCategory>): List<NewsCategory> {
         return NewsCategory.entries.filter { it in categories }
+    }
+
+    private fun normalizeLauncherApps(apps: List<LauncherAppShortcut>): List<LauncherAppShortcut> {
+        return apps
+            .filter { it.displayName.isNotBlank() && it.packageName.isNotBlank() }
+            .distinctBy { it.packageName }
+            .take(3)
     }
 
     private object Keys {
@@ -180,5 +202,6 @@ class WidgetPreferences(private val context: Context) {
         val weatherUpdatedAtMillis = longPreferencesKey("weather_updated_at_millis")
         val lastNewsError = stringPreferencesKey("last_news_error")
         val lastWeatherError = stringPreferencesKey("last_weather_error")
+        val launcherAppsJson = stringPreferencesKey("launcher_apps_json")
     }
 }

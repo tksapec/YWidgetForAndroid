@@ -1,6 +1,8 @@
 package com.example.yahoonewswidget
 
 import android.Manifest
+import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -42,6 +44,7 @@ import androidx.glance.appwidget.updateAll
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import com.example.yahoonewswidget.data.DisplayStyle
+import com.example.yahoonewswidget.data.LauncherAppShortcut
 import com.example.yahoonewswidget.data.NewsCategory
 import com.example.yahoonewswidget.data.WeatherLocationMode
 import com.example.yahoonewswidget.data.WidgetPreferences
@@ -109,6 +112,12 @@ class MainActivity : ComponentActivity() {
                                 RefreshWorker.enqueueImmediate(this@MainActivity)
                             }
                         },
+                        onLauncherAppsChanged = { apps ->
+                            lifecycleScope.launch {
+                                preferences.updateLauncherApps(apps)
+                                YahooNewsWidget().updateAll(this@MainActivity)
+                            }
+                        },
                     )
                 }
             }
@@ -125,8 +134,10 @@ private fun SettingsScreen(
     onIntervalSelected: (Long) -> Unit,
     onWeatherLocationModeSelected: (WeatherLocationMode) -> Unit,
     onFixedLocationSaved: (String) -> Unit,
+    onLauncherAppsChanged: (List<LauncherAppShortcut>) -> Unit,
 ) {
     val context = LocalContext.current
+    val launcherAppOptions = remember(context) { loadLauncherAppOptions(context) }
     var fixedLocationInput by remember(settings.fixedLocationQuery) {
         mutableStateOf(settings.fixedLocationQuery)
     }
@@ -184,6 +195,14 @@ private fun SettingsScreen(
             IntervalMenu(
                 selected = settings.updateIntervalMinutes,
                 onSelected = onIntervalSelected,
+            )
+        }
+
+        SettingBlock(label = "\u30E9\u30F3\u30C1\u30E3\u30FC\u30DC\u30BF\u30F3") {
+            LauncherAppSelector(
+                selectedApps = settings.launcherApps,
+                availableApps = launcherAppOptions,
+                onChanged = onLauncherAppsChanged,
             )
         }
 
@@ -289,6 +308,97 @@ private fun CategorySelector(
 }
 
 @Composable
+private fun LauncherAppSelector(
+    selectedApps: List<LauncherAppShortcut>,
+    availableApps: List<LauncherAppShortcut>,
+    onChanged: (List<LauncherAppShortcut>) -> Unit,
+) {
+    if (availableApps.isEmpty()) {
+        Text(
+            text = "\u8D77\u52D5\u53EF\u80FD\u306A\u30A2\u30D7\u30EA\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        return
+    }
+
+    repeat(3) { slotIndex ->
+        val selected = selectedApps.getOrNull(slotIndex)
+        SettingRow(label = "\u30B9\u30ED\u30C3\u30C8${slotIndex + 1}") {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                LauncherAppMenu(
+                    slotIndex = slotIndex,
+                    selected = selected,
+                    selectedApps = selectedApps,
+                    availableApps = availableApps,
+                    onSelected = { app ->
+                        onChanged(updateLauncherAppSlot(selectedApps, slotIndex, app))
+                    },
+                )
+                Button(
+                    onClick = { onChanged(updateLauncherAppSlot(selectedApps, slotIndex, null)) },
+                    enabled = selected != null,
+                ) {
+                    Text("\u89E3\u9664")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun LauncherAppMenu(
+    slotIndex: Int,
+    selected: LauncherAppShortcut?,
+    selectedApps: List<LauncherAppShortcut>,
+    availableApps: List<LauncherAppShortcut>,
+    onSelected: (LauncherAppShortcut) -> Unit,
+) {
+    val usedByOtherSlots = selectedApps
+        .filterIndexed { index, _ -> index != slotIndex }
+        .map { it.packageName }
+        .toSet()
+    val selectableApps = availableApps.filter { it.packageName !in usedByOtherSlots }
+    var expanded by remember { mutableStateOf(false) }
+
+    OutlinedButton(onClick = { expanded = true }) {
+        Text(selected?.displayName ?: "\u672A\u767B\u9332")
+    }
+    DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+        selectableApps.forEach { app ->
+            DropdownMenuItem(
+                text = { Text(app.displayName) },
+                onClick = {
+                    expanded = false
+                    onSelected(app)
+                },
+            )
+        }
+    }
+}
+
+private fun updateLauncherAppSlot(
+    selectedApps: List<LauncherAppShortcut>,
+    slotIndex: Int,
+    app: LauncherAppShortcut?,
+): List<LauncherAppShortcut> {
+    val next = selectedApps.toMutableList()
+    if (app == null) {
+        if (slotIndex in next.indices) next.removeAt(slotIndex)
+    } else if (slotIndex in next.indices) {
+        next[slotIndex] = app
+    } else {
+        next += app
+    }
+    return next
+        .filter { it.displayName.isNotBlank() && it.packageName.isNotBlank() }
+        .distinctBy { it.packageName }
+        .take(3)
+}
+
+@Composable
 private fun WeatherLocationSelector(
     selected: WeatherLocationMode,
     locationGranted: Boolean,
@@ -309,6 +419,22 @@ private fun WeatherLocationSelector(
             }
         }
     }
+}
+
+private fun loadLauncherAppOptions(context: Context): List<LauncherAppShortcut> {
+    val packageManager = context.packageManager
+    val intent = Intent(Intent.ACTION_MAIN).apply {
+        addCategory(Intent.CATEGORY_LAUNCHER)
+    }
+    return packageManager.queryIntentActivities(intent, 0)
+        .mapNotNull { resolveInfo ->
+            val packageName = resolveInfo.activityInfo?.packageName ?: return@mapNotNull null
+            val displayName = resolveInfo.loadLabel(packageManager)?.toString()?.trim().orEmpty()
+            if (displayName.isBlank()) return@mapNotNull null
+            LauncherAppShortcut(displayName = displayName, packageName = packageName)
+        }
+        .distinctBy { it.packageName }
+        .sortedBy { it.displayName.lowercase() }
 }
 
 @Composable
