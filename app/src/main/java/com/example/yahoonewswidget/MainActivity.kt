@@ -56,10 +56,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         lifecycleScope.launch {
-            RefreshWorker.schedulePeriodic(
-                this@MainActivity,
-                preferences.currentSettings().updateIntervalMinutes,
-            )
+            RefreshWorker.schedulePeriodicFromSettings(this@MainActivity)
         }
 
         setContent {
@@ -92,7 +89,7 @@ class MainActivity : ComponentActivity() {
                         onIntervalSelected = { minutes ->
                             lifecycleScope.launch {
                                 preferences.updateInterval(minutes)
-                                RefreshWorker.schedulePeriodic(this@MainActivity, minutes)
+                                RefreshWorker.schedulePeriodicFromSettings(this@MainActivity)
                             }
                         },
                         onWeatherLocationModeSelected = { mode ->

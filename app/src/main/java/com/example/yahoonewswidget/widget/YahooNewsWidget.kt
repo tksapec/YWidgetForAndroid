@@ -1,5 +1,8 @@
 package com.example.yahoonewswidget.widget
 
+import android.appwidget.AppWidgetManager
+import android.content.ActivityNotFoundException
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -21,6 +24,7 @@ import androidx.glance.appwidget.cornerRadius
 import androidx.glance.appwidget.lazy.LazyColumn
 import androidx.glance.appwidget.lazy.items
 import androidx.glance.appwidget.provideContent
+import androidx.glance.appwidget.updateAll
 import androidx.glance.background
 import androidx.glance.layout.Alignment
 import androidx.glance.layout.Box
@@ -49,6 +53,9 @@ import java.util.Calendar
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 class YahooNewsWidget : GlanceAppWidget() {
     override val sizeMode: SizeMode = SizeMode.Exact
@@ -178,9 +185,26 @@ private fun BottomActions() {
         modifier = GlanceModifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        YahooButton()
         Spacer(GlanceModifier.defaultWeight())
         TodayButton()
     }
+}
+
+@Composable
+private fun YahooButton() {
+    Text(
+        text = "Yahoo!",
+        modifier = GlanceModifier
+            .padding(top = 2.dp)
+            .clickable(actionRunCallback<OpenYahooAppAction>()),
+        style = TextStyle(
+            color = ColorProvider(Color(0xFFE4E4E4)),
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+        ),
+        maxLines = 1,
+    )
 }
 
 @Composable
@@ -249,6 +273,7 @@ private fun Divider() {
 }
 
 private val UrlParameterKey = ActionParameters.Key<String>("url")
+private const val YAHOO_APP_PACKAGE = "jp.co.yahoo.android.yjtop"
 private const val YAHOO_TOP_URL = "https://www.yahoo.co.jp/"
 
 private fun openUrlAction(url: String) = actionRunCallback<OpenUrlAction>(
@@ -292,7 +317,7 @@ class OpenTodayWikipediaAction : ActionCallback {
         glanceId: GlanceId,
         parameters: ActionParameters,
     ) {
-        context.startActivity(
+        context.tryStartActivity(
             Intent(Intent.ACTION_VIEW, todayWikipediaUri()).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             },
@@ -307,11 +332,21 @@ class OpenUrlAction : ActionCallback {
         parameters: ActionParameters,
     ) {
         val url = parameters[UrlParameterKey] ?: return
-        context.startActivity(
-            Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            },
-        )
+        context.openYahooUrlWithFallback(url)
+    }
+}
+
+class OpenYahooAppAction : ActionCallback {
+    override suspend fun onAction(
+        context: Context,
+        glanceId: GlanceId,
+        parameters: ActionParameters,
+    ) {
+        val launchIntent = context.packageManager.getLaunchIntentForPackage(YAHOO_APP_PACKAGE)
+            ?.apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+        if (!context.tryStartActivity(launchIntent)) {
+            context.openYahooUrlWithFallback(YAHOO_TOP_URL)
+        }
     }
 }
 
@@ -320,7 +355,79 @@ class YahooNewsWidgetReceiver : GlanceAppWidgetReceiver() {
 
     override fun onEnabled(context: Context) {
         super.onEnabled(context)
-        RefreshWorker.enqueueImmediate(context)
-        RefreshWorker.schedulePeriodic(context, 60L)
+        runWidgetRefreshSetup(context, refreshImmediately = true)
+    }
+
+    override fun onUpdate(
+        context: Context,
+        appWidgetManager: AppWidgetManager,
+        appWidgetIds: IntArray,
+    ) {
+        super.onUpdate(context, appWidgetManager, appWidgetIds)
+        runWidgetRefreshSetup(context, refreshImmediately = false)
+    }
+
+    override fun onReceive(context: Context, intent: Intent) {
+        super.onReceive(context, intent)
+        when (intent.action) {
+            Intent.ACTION_BOOT_COMPLETED,
+            Intent.ACTION_MY_PACKAGE_REPLACED,
+            Intent.ACTION_TIME_CHANGED,
+            Intent.ACTION_TIMEZONE_CHANGED,
+            -> runWidgetRefreshSetup(context, refreshImmediately = false)
+        }
+    }
+
+    private fun runWidgetRefreshSetup(context: Context, refreshImmediately: Boolean) {
+        if (!context.hasPlacedWidgets()) return
+
+        val pendingResult = goAsync()
+        CoroutineScope(Dispatchers.Default).launch {
+            try {
+                RefreshWorker.schedulePeriodicFromSettings(context.applicationContext)
+                if (refreshImmediately) {
+                    RefreshWorker.enqueueImmediate(context.applicationContext)
+                } else {
+                    RefreshWorker.enqueueImmediateIfDueFromSettings(context.applicationContext)
+                }
+                YahooNewsWidget().updateAll(context.applicationContext)
+            } finally {
+                pendingResult.finish()
+            }
+        }
+    }
+}
+
+private fun Context.hasPlacedWidgets(): Boolean {
+    val appWidgetManager = AppWidgetManager.getInstance(this)
+    val componentName = ComponentName(this, YahooNewsWidgetReceiver::class.java)
+    return appWidgetManager.getAppWidgetIds(componentName).isNotEmpty()
+}
+
+private fun Context.openYahooUrlWithFallback(url: String) {
+    val uri = Uri.parse(url)
+    val yahooIntent = Intent(Intent.ACTION_VIEW, uri).apply {
+        setPackage(YAHOO_APP_PACKAGE)
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    if (!tryStartActivity(yahooIntent)) {
+        val fallbackIntent = Intent(Intent.ACTION_VIEW, uri).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        tryStartActivity(fallbackIntent)
+    }
+}
+
+private fun Context.tryStartActivity(intent: Intent?): Boolean {
+    if (intent == null) return false
+    return try {
+        startActivity(intent)
+        true
+    } catch (_: ActivityNotFoundException) {
+        false
+    } catch (_: SecurityException) {
+        false
+    } catch (_: IllegalStateException) {
+        false
     }
 }

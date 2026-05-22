@@ -13,16 +13,23 @@ import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.OutOfQuotaPolicy
 import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.BackoffPolicy
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.example.yahoonewswidget.data.WeatherLocationMode
 import com.example.yahoonewswidget.data.WidgetPreferences
+import com.example.yahoonewswidget.data.WidgetSettings
 import com.example.yahoonewswidget.network.RssClient
 import com.example.yahoonewswidget.network.WeatherClient
 import com.example.yahoonewswidget.widget.YahooNewsWidget
+import java.io.IOException
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
+import java.net.HttpURLConnection
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
@@ -37,6 +44,7 @@ class RefreshWorker(
         val preferences = WidgetPreferences(applicationContext)
         val settings = preferences.currentSettings()
         val now = System.currentTimeMillis()
+        var retryNeeded = false
 
         withContext(Dispatchers.IO) {
             val rssClient = RssClient()
@@ -50,8 +58,9 @@ class RefreshWorker(
                 } else {
                     preferences.saveNewsError("\u30CB\u30E5\u30FC\u30B9\u53D6\u5F97\u5931\u6557")
                 }
-            }.onFailure {
+            }.onFailure { error ->
                 preferences.saveNewsError("\u30CB\u30E5\u30FC\u30B9\u53D6\u5F97\u5931\u6557")
+                if (error.isTransientFailure()) retryNeeded = true
             }
 
             if (settings.weatherEnabled && settings.weatherLocationMode != WeatherLocationMode.Disabled) {
@@ -67,12 +76,13 @@ class RefreshWorker(
                     )
                 }.onFailure { error ->
                     preferences.saveWeatherError(error.message ?: "\u5929\u6C17\u53D6\u5F97\u5931\u6557")
+                    if (error.isTransientFailure()) retryNeeded = true
                 }
             }
         }
 
         YahooNewsWidget().updateAll(applicationContext)
-        return Result.success()
+        return if (retryNeeded) Result.retry() else Result.success()
     }
 
     private fun hasCoarseLocationPermission(): Boolean {
@@ -169,16 +179,31 @@ class RefreshWorker(
     companion object {
         private const val UNIQUE_REFRESH_WORK = "yahoo_news_widget_refresh"
         private const val UNIQUE_PERIODIC_WORK = "yahoo_news_widget_periodic_refresh"
+        private const val BACKOFF_MINUTES = 10L
 
         fun enqueueImmediate(context: Context) {
             val request = OneTimeWorkRequestBuilder<RefreshWorker>()
                 .setConstraints(networkConstraints())
+                .setBackoffCriteria(BackoffPolicy.LINEAR, BACKOFF_MINUTES, TimeUnit.MINUTES)
+                .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
                 .build()
             WorkManager.getInstance(context).enqueueUniqueWork(
                 UNIQUE_REFRESH_WORK,
                 ExistingWorkPolicy.REPLACE,
                 request,
             )
+        }
+
+        suspend fun enqueueImmediateIfDueFromSettings(context: Context) {
+            val settings = WidgetPreferences(context).currentSettings()
+            if (settings.isRefreshDue(System.currentTimeMillis())) {
+                enqueueImmediate(context)
+            }
+        }
+
+        suspend fun schedulePeriodicFromSettings(context: Context) {
+            val settings = WidgetPreferences(context).currentSettings()
+            schedulePeriodic(context, settings.updateIntervalMinutes)
         }
 
         fun schedulePeriodic(context: Context, intervalMinutes: Long) {
@@ -188,6 +213,7 @@ class RefreshWorker(
                 TimeUnit.MINUTES,
             )
                 .setConstraints(networkConstraints())
+                .setBackoffCriteria(BackoffPolicy.LINEAR, BACKOFF_MINUTES, TimeUnit.MINUTES)
                 .build()
 
             WorkManager.getInstance(context).enqueueUniquePeriodicWork(
@@ -200,5 +226,23 @@ class RefreshWorker(
         private fun networkConstraints(): Constraints = Constraints.Builder()
             .setRequiredNetworkType(NetworkType.CONNECTED)
             .build()
+
+        private fun WidgetSettings.isRefreshDue(now: Long): Boolean {
+            if (newsUpdatedAtMillis <= 0L) return true
+            val intervalMillis = updateIntervalMinutes.coerceAtLeast(1L) * 60_000L
+            return now - newsUpdatedAtMillis >= intervalMillis
+        }
+
+        private fun Throwable.isTransientFailure(): Boolean {
+            if (this is SocketTimeoutException || this is UnknownHostException || this is IOException) {
+                return true
+            }
+            val message = message.orEmpty()
+            val status = Regex("""HTTP\s+(\d{3})""").find(message)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?.toIntOrNull()
+            return status != null && status >= HttpURLConnection.HTTP_INTERNAL_ERROR
+        }
     }
 }
