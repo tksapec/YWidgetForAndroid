@@ -50,12 +50,14 @@ import com.tksapec.ywidget.data.NewsItem
 import com.tksapec.ywidget.data.WidgetPreferences
 import com.tksapec.ywidget.data.WidgetSettings
 import com.tksapec.ywidget.data.WeatherLocationMode
+import com.tksapec.ywidget.data.isNewsRefreshingActive
 import com.tksapec.ywidget.data.weatherIconForCode
 import com.tksapec.ywidget.work.RefreshWorker
 import java.util.Calendar
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.TimeZone
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -68,6 +70,12 @@ class YWidget : GlanceAppWidget() {
         provideContent {
             YWidgetContent(settings = settings)
         }
+    }
+}
+
+suspend fun safeUpdateAll(context: Context) {
+    runCatching {
+        YWidget().updateAll(context)
     }
 }
 
@@ -330,7 +338,8 @@ private fun openLauncherAppAction(packageName: String) = actionRunCallback<OpenL
 )
 
 private fun statusText(settings: WidgetSettings): String {
-    if (settings.newsRefreshing) return "\u30CB\u30E5\u30FC\u30B9\u66F4\u65B0\u4E2D..."
+    val now = System.currentTimeMillis()
+    if (settings.isNewsRefreshingActive(now)) return "\u30CB\u30E5\u30FC\u30B9\u66F4\u65B0\u4E2D..."
     if (settings.refreshQueued) return "\u66F4\u65B0\u4E88\u7D04\u4E2D..."
     if (settings.lastNewsError != null && settings.newsUpdatedAtMillis <= 0L) return "\u66F4\u65B0\u5931\u6557"
     val updatedAt = formatUpdatedAt(settings.newsUpdatedAtMillis)
@@ -342,7 +351,9 @@ private fun statusText(settings: WidgetSettings): String {
 }
 
 private fun emptyNewsText(settings: WidgetSettings): String {
-    if (settings.newsRefreshing) return "\u30CB\u30E5\u30FC\u30B9\u66F4\u65B0\u4E2D..."
+    val now = System.currentTimeMillis()
+    if (settings.isNewsRefreshingActive(now)) return "\u30CB\u30E5\u30FC\u30B9\u66F4\u65B0\u4E2D..."
+    if (settings.newsRefreshing) return "\u524D\u56DE\u66F4\u65B0\u51E6\u7406\u304C\u4E2D\u65AD\u3055\u308C\u307E\u3057\u305F"
     if (settings.refreshQueued) return "\u66F4\u65B0\u4E88\u7D04\u4E2D..."
     if (settings.lastNewsError != null) return "\u30CB\u30E5\u30FC\u30B9\u53D6\u5F97\u5931\u6557"
     return "\u53D6\u5F97\u4E2D"
@@ -354,7 +365,7 @@ private fun formatUpdatedAt(updatedAtMillis: Long): String {
 }
 
 private fun todayWikipediaUri(): Uri {
-    val today = Calendar.getInstance(Locale.JAPAN)
+    val today = Calendar.getInstance(TimeZone.getTimeZone("Asia/Tokyo"), Locale.JAPAN)
     val title = "${today.get(Calendar.MONTH) + 1}\u6708${today.get(Calendar.DAY_OF_MONTH)}\u65E5"
     return Uri.Builder()
         .scheme("https")
@@ -370,9 +381,16 @@ class RefreshAction : ActionCallback {
         glanceId: GlanceId,
         parameters: ActionParameters,
     ) {
-        WidgetPreferences(context).updateRefreshQueued(true)
-        YWidget().updateAll(context)
-        RefreshWorker.enqueueImmediate(context)
+        val appContext = context.applicationContext
+        val preferences = WidgetPreferences(appContext)
+        try {
+            preferences.updateRefreshQueued(true)
+            safeUpdateAll(appContext)
+            RefreshWorker.enqueueImmediate(appContext)
+        } catch (_: Throwable) {
+            preferences.clearRefreshState()
+            safeUpdateAll(appContext)
+        }
     }
 }
 
@@ -452,6 +470,7 @@ class YWidgetReceiver : GlanceAppWidgetReceiver() {
         CoroutineScope(Dispatchers.Default).launch {
             try {
                 WidgetPreferences(context.applicationContext).clearRefreshState()
+                safeUpdateAll(context.applicationContext)
             } finally {
                 pendingResult.finish()
             }
@@ -482,7 +501,7 @@ class YWidgetReceiver : GlanceAppWidgetReceiver() {
                 } else {
                     RefreshWorker.enqueueImmediateIfDueFromSettings(context.applicationContext)
                 }
-                YWidget().updateAll(context.applicationContext)
+                safeUpdateAll(context.applicationContext)
             } finally {
                 pendingResult.finish()
             }

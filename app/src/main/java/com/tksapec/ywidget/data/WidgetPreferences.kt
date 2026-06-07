@@ -47,6 +47,7 @@ class WidgetPreferences(private val context: Context) {
             newsUpdatedAtMillis = preferences[Keys.newsUpdatedAtMillis] ?: 0L,
             newsRefreshing = preferences[Keys.newsRefreshing] ?: false,
             refreshQueued = preferences[Keys.refreshQueued] ?: false,
+            refreshStartedAtMillis = preferences[Keys.refreshStartedAtMillis] ?: 0L,
             weatherEnabled = preferences[Keys.weatherEnabled] ?: false,
             weatherLocationMode = WeatherLocationMode.fromName(
                 preferences[Keys.weatherLocationMode] ?: WeatherLocationMode.Disabled.name,
@@ -144,7 +145,10 @@ class WidgetPreferences(private val context: Context) {
     suspend fun updateNewsRefreshing(refreshing: Boolean) {
         context.widgetDataStore.edit {
             it[Keys.newsRefreshing] = refreshing
-            if (refreshing) it[Keys.refreshQueued] = false
+            if (refreshing) {
+                it[Keys.refreshQueued] = false
+                it[Keys.refreshStartedAtMillis] = System.currentTimeMillis()
+            }
         }
     }
 
@@ -184,6 +188,7 @@ class WidgetPreferences(private val context: Context) {
             it[Keys.refreshQueued] = false
             it[Keys.newsRefreshing] = false
             it[Keys.weatherRefreshing] = false
+            it[Keys.refreshStartedAtMillis] = 0L
         }
     }
 
@@ -247,6 +252,7 @@ class WidgetPreferences(private val context: Context) {
         val newsUpdatedAtMillis = longPreferencesKey("news_updated_at_millis")
         val newsRefreshing = booleanPreferencesKey("news_refreshing")
         val refreshQueued = booleanPreferencesKey("refresh_queued")
+        val refreshStartedAtMillis = longPreferencesKey("refresh_started_at_millis")
         val weatherEnabled = booleanPreferencesKey("weather_enabled")
         val weatherLocationMode = stringPreferencesKey("weather_location_mode")
         val locationLabel = stringPreferencesKey("location_label")

@@ -6,7 +6,6 @@ import android.content.pm.PackageManager
 import android.location.Address
 import android.location.Geocoder
 import androidx.core.content.ContextCompat
-import androidx.glance.appwidget.updateAll
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
@@ -21,10 +20,12 @@ import androidx.work.WorkerParameters
 import com.tksapec.ywidget.data.WeatherLocationMode
 import com.tksapec.ywidget.data.WidgetPreferences
 import com.tksapec.ywidget.data.WidgetSettings
+import com.tksapec.ywidget.data.CURRENT_LOCATION_UNAVAILABLE_MESSAGE
 import com.tksapec.ywidget.data.isRefreshDue
+import com.tksapec.ywidget.data.userFacingWeatherErrorMessage
 import com.tksapec.ywidget.network.RssClient
 import com.tksapec.ywidget.network.WeatherClient
-import com.tksapec.ywidget.widget.YWidget
+import com.tksapec.ywidget.widget.safeUpdateAll
 import java.io.IOException
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
@@ -38,6 +39,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 class RefreshWorker(
     appContext: Context,
@@ -45,88 +47,73 @@ class RefreshWorker(
 ) : CoroutineWorker(appContext, params) {
     override suspend fun doWork(): Result {
         val preferences = WidgetPreferences(applicationContext)
-        val settings = preferences.currentSettings()
-        val now = System.currentTimeMillis()
         var retryNeeded = false
+        var result = Result.success()
 
         try {
             withContext(Dispatchers.IO) {
+                val settings = preferences.currentSettings()
+                val now = System.currentTimeMillis()
                 val rssClient = RssClient()
                 preferences.updateNewsRefreshing(true)
-                YWidget().updateAll(applicationContext)
-                try {
-                    runCatching {
-                        settings.selectedCategories
-                            .flatMap { category -> rssClient.fetch(category) }
-                            .distinctBy { it.url }
-                    }.onSuccess { news ->
-                        if (news.isNotEmpty()) {
-                            preferences.saveNews(news, now)
-                        } else {
-                            preferences.saveNewsError("\u30CB\u30E5\u30FC\u30B9\u53D6\u5F97\u5931\u6557")
-                            retryNeeded = true
-                        }
-                    }.onFailure { error ->
-                        if (error is CancellationException) throw error
+                safeUpdateAll(applicationContext)
+
+                runCatching {
+                    settings.selectedCategories
+                        .flatMap { category -> rssClient.fetch(category) }
+                        .distinctBy { it.url }
+                }.onSuccess { news ->
+                    if (news.isNotEmpty()) {
+                        preferences.saveNews(news, now)
+                    } else {
                         preferences.saveNewsError("\u30CB\u30E5\u30FC\u30B9\u53D6\u5F97\u5931\u6557")
-                        if (error.isTransientFailure()) retryNeeded = true
+                        retryNeeded = true
                     }
-                } finally {
-                    withContext(NonCancellable) {
-                        preferences.updateNewsRefreshing(false)
-                        YWidget().updateAll(applicationContext)
-                    }
+                }.onFailure { error ->
+                    if (error is CancellationException) throw error
+                    preferences.saveNewsError("\u30CB\u30E5\u30FC\u30B9\u53D6\u5F97\u5931\u6557")
+                    if (error.isTransientFailure()) retryNeeded = true
                 }
 
                 if (settings.weatherEnabled && settings.weatherLocationMode != WeatherLocationMode.Disabled) {
                     preferences.updateWeatherRefreshing(true)
-                    YWidget().updateAll(applicationContext)
-                    try {
+                    safeUpdateAll(applicationContext)
+                    runCatching {
+                        resolveWeatherTarget(settings = settings, preferences = preferences)
+                    }.onSuccess { target ->
                         runCatching {
-                            resolveWeatherTarget(settings = settings, preferences = preferences)
-                        }.onSuccess { target ->
-                            runCatching {
-                                WeatherClient().fetch(target.latitude, target.longitude)
-                            }.onSuccess { weather ->
-                                preferences.saveWeather(
-                                    code = weather.code,
-                                    temperatureCelsius = weather.temperatureCelsius,
-                                    locationLabel = target.label,
-                                    updatedAtMillis = now,
-                                )
-                            }.onFailure { error ->
-                                if (error is CancellationException) throw error
-                                preferences.saveWeatherError(error.message ?: "\u5929\u6C17\u53D6\u5F97\u5931\u6557")
-                                if (error.isTransientFailure()) retryNeeded = true
-                            }
+                            WeatherClient().fetch(target.latitude, target.longitude)
+                        }.onSuccess { weather ->
+                            preferences.saveWeather(
+                                code = weather.code,
+                                temperatureCelsius = weather.temperatureCelsius,
+                                locationLabel = target.label,
+                                updatedAtMillis = now,
+                            )
                         }.onFailure { error ->
                             if (error is CancellationException) throw error
-                            preferences.saveWeatherError(error.message ?: "\u5929\u6C17\u53D6\u5F97\u5931\u6557")
+                            preferences.saveWeatherError(userFacingWeatherErrorMessage(error))
+                            if (error.isTransientFailure()) retryNeeded = true
                         }
-                    } finally {
-                        withContext(NonCancellable) {
-                            preferences.updateWeatherRefreshing(false)
-                            YWidget().updateAll(applicationContext)
-                        }
+                    }.onFailure { error ->
+                        if (error is CancellationException) throw error
+                        preferences.saveWeatherError(userFacingWeatherErrorMessage(error))
                     }
-                } else {
-                    preferences.updateWeatherRefreshing(false)
                 }
             }
+            result = if (retryNeeded) Result.retry() else Result.success()
         } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            result = if (error.isTransientFailure()) Result.retry() else Result.failure()
+        } finally {
             withContext(NonCancellable) {
                 preferences.clearRefreshState()
-                YWidget().updateAll(applicationContext)
+                safeUpdateAll(applicationContext)
             }
-            throw error
         }
 
-        val rerunRequested = preferences.currentSettings().refreshQueued
-        if (rerunRequested) {
-            enqueueImmediate(applicationContext, ExistingWorkPolicy.APPEND_OR_REPLACE)
-        }
-        YWidget().updateAll(applicationContext)
-        return if (retryNeeded && !rerunRequested) Result.retry() else Result.success()
+        return result
     }
 
     private fun hasCoarseLocationPermission(): Boolean {
@@ -153,8 +140,10 @@ class RefreshWorker(
         }
         val client = LocationServices.getFusedLocationProviderClient(applicationContext)
         val location = client.lastLocation.await()
-            ?: client.getCurrentLocation(Priority.PRIORITY_BALANCED_POWER_ACCURACY, null).await()
-            ?: error("\u73FE\u5728\u5730\u53D6\u5F97\u5931\u6557")
+            ?: withTimeoutOrNull(CURRENT_LOCATION_TIMEOUT_MILLIS) {
+                client.getCurrentLocation(Priority.PRIORITY_BALANCED_POWER_ACCURACY, null).await()
+            }
+            ?: error(CURRENT_LOCATION_UNAVAILABLE_MESSAGE)
 
         return WeatherTarget(
             latitude = location.latitude,
@@ -224,6 +213,7 @@ class RefreshWorker(
         private const val UNIQUE_REFRESH_WORK = "yahoo_news_widget_refresh"
         private const val UNIQUE_PERIODIC_WORK = "yahoo_news_widget_periodic_refresh"
         private const val BACKOFF_MINUTES = 10L
+        private const val CURRENT_LOCATION_TIMEOUT_MILLIS = 10_000L
 
         fun enqueueImmediate(context: Context) {
             enqueueImmediate(context, ExistingWorkPolicy.KEEP)

@@ -18,6 +18,7 @@ data class WidgetSettings(
     val newsUpdatedAtMillis: Long = 0L,
     val newsRefreshing: Boolean = false,
     val refreshQueued: Boolean = false,
+    val refreshStartedAtMillis: Long = 0L,
     val weatherEnabled: Boolean = false,
     val weatherLocationMode: WeatherLocationMode = WeatherLocationMode.Disabled,
     val locationLabel: String? = null,
@@ -73,6 +74,29 @@ fun WidgetSettings.isRefreshDue(now: Long): Boolean {
         weatherLocationMode != WeatherLocationMode.Disabled &&
         (weatherUpdatedAtMillis <= 0L || now - weatherUpdatedAtMillis >= intervalMillis)
     return newsDue || weatherDue
+}
+
+fun WidgetSettings.isNewsRefreshingActive(now: Long): Boolean {
+    return newsRefreshing &&
+        refreshStartedAtMillis > 0L &&
+        now - refreshStartedAtMillis < REFRESH_ACTIVE_TIMEOUT_MILLIS
+}
+
+const val REFRESH_ACTIVE_TIMEOUT_MILLIS: Long = 2 * 60 * 1_000L
+const val CURRENT_LOCATION_UNAVAILABLE_MESSAGE: String =
+    "\u73FE\u5728\u5730\u3092\u53D6\u5F97\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F\u3002\u56FA\u5B9A\u5730\u57DF\u306E\u4F7F\u7528\u3092\u304A\u3059\u3059\u3081\u3057\u307E\u3059\u3002"
+private const val GENERIC_WEATHER_ERROR_MESSAGE: String = "\u5929\u6C17\u53D6\u5F97\u5931\u6557"
+
+fun userFacingWeatherErrorMessage(error: Throwable): String {
+    val rawMessage = error.message.orEmpty()
+    val diagnostic = error.toString()
+    if (
+        rawMessage.contains("UNAVAILABLE", ignoreCase = true) ||
+        diagnostic.contains("UNAVAILABLE", ignoreCase = true)
+    ) {
+        return CURRENT_LOCATION_UNAVAILABLE_MESSAGE
+    }
+    return rawMessage.ifBlank { GENERIC_WEATHER_ERROR_MESSAGE }
 }
 
 enum class DisplayStyle(

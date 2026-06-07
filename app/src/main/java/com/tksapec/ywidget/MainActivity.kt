@@ -42,7 +42,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
-import androidx.glance.appwidget.updateAll
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import com.tksapec.ywidget.data.DisplayStyle
@@ -52,8 +51,8 @@ import com.tksapec.ywidget.data.NewsCategory
 import com.tksapec.ywidget.data.WeatherLocationMode
 import com.tksapec.ywidget.data.WidgetPreferences
 import com.tksapec.ywidget.data.WidgetSettings
-import com.tksapec.ywidget.widget.YWidget
 import com.tksapec.ywidget.widget.YWidgetReceiver
+import com.tksapec.ywidget.widget.safeUpdateAll
 import com.tksapec.ywidget.work.RefreshWorker
 import kotlinx.coroutines.launch
 
@@ -81,13 +80,13 @@ class MainActivity : ComponentActivity() {
                         onDisplayCountSelected = { count ->
                             lifecycleScope.launch {
                                 preferences.updateDisplayCount(count)
-                                YWidget().updateAll(this@MainActivity)
+                                safeUpdateAll(this@MainActivity)
                             }
                         },
                         onDisplayStyleSelected = { style ->
                             lifecycleScope.launch {
                                 preferences.updateDisplayStyle(style)
-                                YWidget().updateAll(this@MainActivity)
+                                safeUpdateAll(this@MainActivity)
                             }
                         },
                         onIntervalSelected = { minutes ->
@@ -102,7 +101,7 @@ class MainActivity : ComponentActivity() {
                             lifecycleScope.launch {
                                 preferences.updateWeatherLocationMode(mode)
                                 if (mode == WeatherLocationMode.Disabled) {
-                                    YWidget().updateAll(this@MainActivity)
+                                    safeUpdateAll(this@MainActivity)
                                 } else {
                                     enqueueImmediateRefresh()
                                 }
@@ -118,7 +117,13 @@ class MainActivity : ComponentActivity() {
                         onLauncherAppSlotsChanged = { slots ->
                             lifecycleScope.launch {
                                 preferences.updateLauncherAppSlots(slots)
-                                YWidget().updateAll(this@MainActivity)
+                                safeUpdateAll(this@MainActivity)
+                            }
+                        },
+                        onRefreshStateReset = {
+                            lifecycleScope.launch {
+                                preferences.clearRefreshState()
+                                safeUpdateAll(this@MainActivity)
                             }
                         },
                     )
@@ -128,9 +133,14 @@ class MainActivity : ComponentActivity() {
     }
 
     private suspend fun enqueueImmediateRefresh() {
-        preferences.updateRefreshQueued(true)
-        YWidget().updateAll(this)
-        RefreshWorker.enqueueImmediate(this)
+        try {
+            preferences.updateRefreshQueued(true)
+            safeUpdateAll(this)
+            RefreshWorker.enqueueImmediate(this)
+        } catch (_: Throwable) {
+            preferences.clearRefreshState()
+            safeUpdateAll(this)
+        }
     }
 }
 
@@ -144,6 +154,7 @@ private fun SettingsScreen(
     onWeatherLocationModeSelected: (WeatherLocationMode) -> Unit,
     onFixedLocationSaved: (String) -> Unit,
     onLauncherAppSlotsChanged: (List<LauncherAppSlot>) -> Unit,
+    onRefreshStateReset: () -> Unit,
 ) {
     val context = LocalContext.current
     val launcherAppOptions = remember(context) { loadLauncherAppOptions(context) }
@@ -263,6 +274,12 @@ private fun SettingsScreen(
             text = "\u66F4\u65B0\u9593\u9694\u306E10\u5206\u306F\u8A2D\u5B9A\u3068\u3057\u3066\u4FDD\u5B58\u3057\u307E\u3059\u304C\u3001Android\u306E\u5236\u7D04\u306B\u3088\u308A\u5B9A\u671F\u5B9F\u884C\u306F15\u5206\u4EE5\u4E0A\u3067\u767B\u9332\u3055\u308C\u307E\u3059\u3002",
             style = MaterialTheme.typography.bodySmall,
         )
+
+        SettingRow(label = "\u66F4\u65B0\u72B6\u614B") {
+            Button(onClick = onRefreshStateReset) {
+                Text("\u66F4\u65B0\u72B6\u614B\u3092\u30EA\u30BB\u30C3\u30C8")
+            }
+        }
     }
 }
 
