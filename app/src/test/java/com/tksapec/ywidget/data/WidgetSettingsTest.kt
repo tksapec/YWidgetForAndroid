@@ -125,6 +125,43 @@ class WidgetSettingsTest {
     }
 
     @Test
+    fun internalWeatherErrorUsesGenericMessage() {
+        val message = userFacingWeatherErrorMessage(IllegalStateException("Weather request failed: HTTP 500"))
+
+        assertEquals("\u5929\u6C17\u53D6\u5F97\u5931\u6557", message)
+    }
+
+    @Test
+    fun newsFetchSummaryKeepsSuccessfulNewsWhenOneCategoryFails() {
+        val news = NewsItem(title = "A", url = "https://example.com/a")
+        val summary = summarizeNewsFetchResults(
+            listOf(
+                Result.success(listOf(news)),
+                Result.failure(IllegalStateException("failed")),
+            ),
+        )
+
+        assertTrue(summary.hasNews)
+        assertEquals(listOf(news), summary.news)
+        assertEquals(1, summary.failedCategoryCount)
+        assertEquals(1, summary.failures.size)
+    }
+
+    @Test
+    fun newsFetchSummaryTreatsEmptySuccessfulCategoryAsFailedForDisplay() {
+        val summary = summarizeNewsFetchResults(
+            listOf(
+                Result.success(emptyList()),
+                Result.success(emptyList()),
+            ),
+        )
+
+        assertFalse(summary.hasNews)
+        assertEquals(2, summary.failedCategoryCount)
+        assertTrue(summary.failures.isEmpty())
+    }
+
+    @Test
     fun launcherSlotNormalizationKeepsEmptySlots() {
         val app = LauncherAppShortcut(
             displayName = "Calendar",

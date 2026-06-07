@@ -17,11 +17,13 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.BackoffPolicy
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import com.tksapec.ywidget.data.PARTIAL_NEWS_ERROR_MESSAGE
 import com.tksapec.ywidget.data.WeatherLocationMode
 import com.tksapec.ywidget.data.WidgetPreferences
 import com.tksapec.ywidget.data.WidgetSettings
 import com.tksapec.ywidget.data.CURRENT_LOCATION_UNAVAILABLE_MESSAGE
 import com.tksapec.ywidget.data.isRefreshDue
+import com.tksapec.ywidget.data.summarizeNewsFetchResults
 import com.tksapec.ywidget.data.userFacingWeatherErrorMessage
 import com.tksapec.ywidget.network.RssClient
 import com.tksapec.ywidget.network.WeatherClient
@@ -58,21 +60,29 @@ class RefreshWorker(
                 preferences.updateNewsRefreshing(true)
                 safeUpdateAll(applicationContext)
 
-                runCatching {
-                    settings.selectedCategories
-                        .flatMap { category -> rssClient.fetch(category) }
-                        .distinctBy { it.url }
-                }.onSuccess { news ->
-                    if (news.isNotEmpty()) {
-                        preferences.saveNews(news, now)
-                    } else {
-                        preferences.saveNewsError("\u30CB\u30E5\u30FC\u30B9\u53D6\u5F97\u5931\u6557")
-                        retryNeeded = true
-                    }
-                }.onFailure { error ->
-                    if (error is CancellationException) throw error
+                val categoryResults = settings.selectedCategories.map { category ->
+                    runCatching { rssClient.fetch(category) }
+                }
+                val firstCancellation = categoryResults
+                    .mapNotNull { it.exceptionOrNull() as? CancellationException }
+                    .firstOrNull()
+                if (firstCancellation != null) throw firstCancellation
+
+                val newsSummary = summarizeNewsFetchResults(categoryResults)
+
+                if (newsSummary.hasNews) {
+                    preferences.saveNews(
+                        news = newsSummary.news,
+                        updatedAtMillis = now,
+                        warningMessage = PARTIAL_NEWS_ERROR_MESSAGE.takeIf {
+                            newsSummary.failedCategoryCount > 0
+                        },
+                    )
+                    if (newsSummary.failures.any { it.isTransientFailure() }) retryNeeded = true
+                } else {
                     preferences.saveNewsError("\u30CB\u30E5\u30FC\u30B9\u53D6\u5F97\u5931\u6557")
-                    if (error.isTransientFailure()) retryNeeded = true
+                    retryNeeded = newsSummary.failures.isEmpty() ||
+                        newsSummary.failures.any { it.isTransientFailure() }
                 }
 
                 if (settings.weatherEnabled && settings.weatherLocationMode != WeatherLocationMode.Disabled) {
@@ -116,11 +126,30 @@ class RefreshWorker(
         return result
     }
 
-    private fun hasCoarseLocationPermission(): Boolean {
+    private fun hasLocationPermission(): Boolean {
         return ContextCompat.checkSelfPermission(
             applicationContext,
-            Manifest.permission.ACCESS_COARSE_LOCATION,
+            Manifest.permission.ACCESS_FINE_LOCATION,
+        ) == PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(
+                applicationContext,
+                Manifest.permission.ACCESS_COARSE_LOCATION,
+            ) == PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun hasFineLocationPermission(): Boolean {
+        return ContextCompat.checkSelfPermission(
+            applicationContext,
+            Manifest.permission.ACCESS_FINE_LOCATION,
         ) == PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun locationPriority(): Int {
+        return if (hasFineLocationPermission()) {
+            Priority.PRIORITY_HIGH_ACCURACY
+        } else {
+            Priority.PRIORITY_BALANCED_POWER_ACCURACY
+        }
     }
 
     private suspend fun resolveWeatherTarget(
@@ -135,13 +164,13 @@ class RefreshWorker(
     }
 
     private suspend fun resolveCurrentLocation(): WeatherTarget {
-        if (!hasCoarseLocationPermission()) {
+        if (!hasLocationPermission()) {
             error("\u4F4D\u7F6E\u60C5\u5831\u672A\u8A31\u53EF")
         }
         val client = LocationServices.getFusedLocationProviderClient(applicationContext)
         val location = client.lastLocation.await()
             ?: withTimeoutOrNull(CURRENT_LOCATION_TIMEOUT_MILLIS) {
-                client.getCurrentLocation(Priority.PRIORITY_BALANCED_POWER_ACCURACY, null).await()
+                client.getCurrentLocation(locationPriority(), null).await()
             }
             ?: error(CURRENT_LOCATION_UNAVAILABLE_MESSAGE)
 

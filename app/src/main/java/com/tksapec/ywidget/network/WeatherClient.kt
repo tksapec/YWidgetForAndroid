@@ -1,11 +1,14 @@
 package com.tksapec.ywidget.network
 
+import com.tksapec.ywidget.data.WEATHER_CODE_ERROR_MESSAGE
+import com.tksapec.ywidget.data.WEATHER_DATA_FORMAT_ERROR_MESSAGE
+import com.tksapec.ywidget.data.WEATHER_TEMPERATURE_ERROR_MESSAGE
 import java.net.HttpURLConnection
 import java.net.URLEncoder
 import java.net.URL
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.double
-import kotlinx.serialization.json.int
+import kotlinx.serialization.json.doubleOrNull
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
@@ -37,13 +40,27 @@ class WeatherClient {
                 error("Weather request failed: HTTP ${connection.responseCode}")
             }
             val body = connection.inputStream.bufferedReader().use { it.readText() }
-            val current = json.parseToJsonElement(body).jsonObject["current"]!!.jsonObject
-            CurrentWeather(
-                code = current["weather_code"]!!.jsonPrimitive.int,
-                temperatureCelsius = current["temperature_2m"]!!.jsonPrimitive.double,
-            )
+            parseCurrentWeather(body)
         } finally {
             connection.disconnect()
         }
+    }
+
+    internal fun parseCurrentWeather(body: String): CurrentWeather {
+        val root = runCatching { json.parseToJsonElement(body).jsonObject }
+            .getOrElse { error(WEATHER_DATA_FORMAT_ERROR_MESSAGE) }
+        val current = root["current"]
+            ?.let { element -> runCatching { element.jsonObject }.getOrNull() }
+            ?: error(WEATHER_DATA_FORMAT_ERROR_MESSAGE)
+        val code = current["weather_code"]
+            ?.let { element -> runCatching { element.jsonPrimitive.intOrNull }.getOrNull() }
+            ?: error(WEATHER_CODE_ERROR_MESSAGE)
+        val temperature = current["temperature_2m"]
+            ?.let { element -> runCatching { element.jsonPrimitive.doubleOrNull }.getOrNull() }
+            ?: error(WEATHER_TEMPERATURE_ERROR_MESSAGE)
+        return CurrentWeather(
+            code = code,
+            temperatureCelsius = temperature,
+        )
     }
 }

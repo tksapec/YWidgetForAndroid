@@ -67,6 +67,29 @@ fun normalizeLauncherAppSlots(slots: List<LauncherAppSlot>): List<LauncherAppSlo
     }
 }
 
+data class NewsFetchSummary(
+    val news: List<NewsItem>,
+    val failedCategoryCount: Int,
+    val failures: List<Throwable>,
+) {
+    val hasNews: Boolean = news.isNotEmpty()
+}
+
+fun summarizeNewsFetchResults(results: List<Result<List<NewsItem>>>): NewsFetchSummary {
+    val news = results
+        .flatMap { it.getOrDefault(emptyList()) }
+        .distinctBy { it.url }
+    val failures = results.mapNotNull { it.exceptionOrNull() }
+    val emptySuccessfulCategories = results.count {
+        it.isSuccess && it.getOrDefault(emptyList()).isEmpty()
+    }
+    return NewsFetchSummary(
+        news = news,
+        failedCategoryCount = failures.size + emptySuccessfulCategories,
+        failures = failures,
+    )
+}
+
 fun WidgetSettings.isRefreshDue(now: Long): Boolean {
     val intervalMillis = updateIntervalMinutes.coerceAtLeast(1L) * 60_000L
     val newsDue = newsUpdatedAtMillis <= 0L || now - newsUpdatedAtMillis >= intervalMillis
@@ -83,8 +106,13 @@ fun WidgetSettings.isNewsRefreshingActive(now: Long): Boolean {
 }
 
 const val REFRESH_ACTIVE_TIMEOUT_MILLIS: Long = 2 * 60 * 1_000L
+const val PARTIAL_NEWS_ERROR_MESSAGE: String =
+    "\u4E00\u90E8\u30AB\u30C6\u30B4\u30EA\u306E\u53D6\u5F97\u306B\u5931\u6557"
 const val CURRENT_LOCATION_UNAVAILABLE_MESSAGE: String =
     "\u73FE\u5728\u5730\u3092\u53D6\u5F97\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F\u3002\u56FA\u5B9A\u5730\u57DF\u306E\u4F7F\u7528\u3092\u304A\u3059\u3059\u3081\u3057\u307E\u3059\u3002"
+const val WEATHER_DATA_FORMAT_ERROR_MESSAGE: String = "\u5929\u6C17\u30C7\u30FC\u30BF\u5F62\u5F0F\u30A8\u30E9\u30FC"
+const val WEATHER_CODE_ERROR_MESSAGE: String = "\u5929\u6C17\u30B3\u30FC\u30C9\u53D6\u5F97\u5931\u6557"
+const val WEATHER_TEMPERATURE_ERROR_MESSAGE: String = "\u6C17\u6E29\u53D6\u5F97\u5931\u6557"
 private const val GENERIC_WEATHER_ERROR_MESSAGE: String = "\u5929\u6C17\u53D6\u5F97\u5931\u6557"
 
 fun userFacingWeatherErrorMessage(error: Throwable): String {
@@ -96,7 +124,20 @@ fun userFacingWeatherErrorMessage(error: Throwable): String {
     ) {
         return CURRENT_LOCATION_UNAVAILABLE_MESSAGE
     }
-    return rawMessage.ifBlank { GENERIC_WEATHER_ERROR_MESSAGE }
+    return when (rawMessage) {
+        "\u4F4D\u7F6E\u60C5\u5831\u672A\u8A31\u53EF" -> "\u4F4D\u7F6E\u60C5\u5831\u304C\u8A31\u53EF\u3055\u308C\u3066\u3044\u307E\u305B\u3093"
+        "\u73FE\u5728\u5730\u53D6\u5F97\u5931\u6557",
+        CURRENT_LOCATION_UNAVAILABLE_MESSAGE,
+        -> CURRENT_LOCATION_UNAVAILABLE_MESSAGE
+        "\u56FA\u5B9A\u5730\u57DF\u672A\u8A2D\u5B9A",
+        "\u56FA\u5B9A\u5730\u57DF\u89E3\u6C7A\u5931\u6557",
+        "\u5929\u6C17\u8868\u793A\u306A\u3057",
+        WEATHER_DATA_FORMAT_ERROR_MESSAGE,
+        WEATHER_CODE_ERROR_MESSAGE,
+        WEATHER_TEMPERATURE_ERROR_MESSAGE,
+        -> rawMessage
+        else -> GENERIC_WEATHER_ERROR_MESSAGE
+    }
 }
 
 enum class DisplayStyle(

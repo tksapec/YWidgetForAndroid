@@ -162,18 +162,15 @@ private fun SettingsScreen(
         mutableStateOf(settings.fixedLocationQuery)
     }
     var locationGranted by remember {
-        mutableStateOf(
-            ContextCompat.checkSelfPermission(
-                context,
-                Manifest.permission.ACCESS_COARSE_LOCATION,
-            ) == PackageManager.PERMISSION_GRANTED,
-        )
+        mutableStateOf(context.hasLocationPermission())
     }
     val permissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission(),
-    ) { granted ->
-        locationGranted = granted
-        if (granted && settings.weatherLocationMode == WeatherLocationMode.Current) {
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) { grants ->
+        locationGranted = grants[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+            grants[Manifest.permission.ACCESS_COARSE_LOCATION] == true ||
+            context.hasLocationPermission()
+        if (locationGranted && settings.weatherLocationMode == WeatherLocationMode.Current) {
             onWeatherLocationModeSelected(WeatherLocationMode.Current)
         }
     }
@@ -235,7 +232,16 @@ private fun SettingsScreen(
         }
 
         SettingRow(label = "\u4F4D\u7F6E\u60C5\u5831\u6A29\u9650") {
-            Button(onClick = { permissionLauncher.launch(Manifest.permission.ACCESS_COARSE_LOCATION) }) {
+            Button(
+                onClick = {
+                    permissionLauncher.launch(
+                        arrayOf(
+                            Manifest.permission.ACCESS_FINE_LOCATION,
+                            Manifest.permission.ACCESS_COARSE_LOCATION,
+                        ),
+                    )
+                },
+            ) {
                 Text(if (locationGranted) "\u8A31\u53EF\u6E08\u307F" else "\u8A31\u53EF\u3059\u308B")
             }
         }
@@ -490,6 +496,17 @@ private fun Context.hasPlacedWidgets(): Boolean {
     val appWidgetManager = AppWidgetManager.getInstance(this)
     val componentName = ComponentName(this, YWidgetReceiver::class.java)
     return appWidgetManager.getAppWidgetIds(componentName).isNotEmpty()
+}
+
+private fun Context.hasLocationPermission(): Boolean {
+    return ContextCompat.checkSelfPermission(
+        this,
+        Manifest.permission.ACCESS_FINE_LOCATION,
+    ) == PackageManager.PERMISSION_GRANTED ||
+        ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.ACCESS_COARSE_LOCATION,
+        ) == PackageManager.PERMISSION_GRANTED
 }
 
 @Composable

@@ -13,7 +13,12 @@ class RefreshTriggerWorker(
     override suspend fun doWork(): Result {
         val settings = WidgetPreferences(applicationContext).currentSettings()
         if (settings.isRefreshDue(System.currentTimeMillis())) {
-            RefreshWorker.enqueueImmediate(applicationContext)
+            return runCatching {
+                RefreshWorker.enqueueImmediate(applicationContext)
+            }.fold(
+                onSuccess = { Result.success() },
+                onFailure = { Result.retry() },
+            )
         }
         return Result.success()
     }

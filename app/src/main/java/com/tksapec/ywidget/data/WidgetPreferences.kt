@@ -126,12 +126,16 @@ class WidgetPreferences(private val context: Context) {
         }
     }
 
-    suspend fun saveNews(news: List<NewsItem>, updatedAtMillis: Long) {
+    suspend fun saveNews(news: List<NewsItem>, updatedAtMillis: Long, warningMessage: String? = null) {
         context.widgetDataStore.edit {
             it[Keys.newsJson] = json.encodeToString(news)
             it[Keys.newsUpdatedAtMillis] = updatedAtMillis
             it[Keys.newsRefreshing] = false
-            it.remove(Keys.lastNewsError)
+            if (warningMessage == null) {
+                it.remove(Keys.lastNewsError)
+            } else {
+                it[Keys.lastNewsError] = warningMessage
+            }
         }
     }
 
