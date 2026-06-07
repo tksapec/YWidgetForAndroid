@@ -1,4 +1,4 @@
-package com.example.yahoonewswidget.data
+package com.tksapec.ywidget.data
 
 import kotlinx.serialization.Serializable
 
@@ -16,8 +16,9 @@ data class WidgetSettings(
     val updateIntervalMinutes: Long = 60,
     val news: List<NewsItem> = emptyList(),
     val newsUpdatedAtMillis: Long = 0L,
-    val weatherEnabled: Boolean = true,
-    val weatherLocationMode: WeatherLocationMode = WeatherLocationMode.Current,
+    val newsRefreshing: Boolean = false,
+    val weatherEnabled: Boolean = false,
+    val weatherLocationMode: WeatherLocationMode = WeatherLocationMode.Disabled,
     val locationLabel: String? = null,
     val fixedLocationQuery: String = "",
     val fixedLatitude: Double? = null,
@@ -25,9 +26,10 @@ data class WidgetSettings(
     val weatherCode: Int? = null,
     val temperatureCelsius: Double? = null,
     val weatherUpdatedAtMillis: Long = 0L,
+    val weatherRefreshing: Boolean = false,
     val lastNewsError: String? = null,
     val lastWeatherError: String? = null,
-    val launcherApps: List<LauncherAppShortcut> = emptyList(),
+    val launcherAppSlots: List<LauncherAppSlot> = emptyLauncherAppSlots(),
 )
 
 @Serializable
@@ -35,6 +37,16 @@ data class LauncherAppShortcut(
     val displayName: String,
     val packageName: String,
 )
+
+@Serializable
+data class LauncherAppSlot(
+    val slotIndex: Int,
+    val app: LauncherAppShortcut? = null,
+)
+
+fun emptyLauncherAppSlots(): List<LauncherAppSlot> = (0..2).map { slotIndex ->
+    LauncherAppSlot(slotIndex = slotIndex)
+}
 
 enum class DisplayStyle(
     val label: String,
@@ -57,7 +69,7 @@ enum class WeatherLocationMode(val label: String) {
     Disabled("\u8868\u793A\u3057\u306A\u3044");
 
     companion object {
-        fun fromName(name: String): WeatherLocationMode = entries.firstOrNull { it.name == name } ?: Current
+        fun fromName(name: String): WeatherLocationMode = entries.firstOrNull { it.name == name } ?: Disabled
     }
 }
 

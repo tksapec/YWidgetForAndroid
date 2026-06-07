@@ -1,4 +1,4 @@
-package com.example.yahoonewswidget.network
+package com.tksapec.ywidget.network
 
 import java.net.HttpURLConnection
 import java.net.URLEncoder
@@ -30,7 +30,7 @@ class WeatherClient {
         connection.connectTimeout = 10_000
         connection.readTimeout = 10_000
         connection.requestMethod = "GET"
-        connection.setRequestProperty("User-Agent", "YahooNewsWidget/1.0")
+        connection.setRequestProperty("User-Agent", "YWidget/1.0")
 
         return try {
             if (connection.responseCode !in 200..299) {

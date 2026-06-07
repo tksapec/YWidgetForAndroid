@@ -1,5 +1,3 @@
-import com.android.build.gradle.internal.api.BaseVariantOutputImpl
-
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -8,11 +6,11 @@ plugins {
 }
 
 android {
-    namespace = "com.example.yahoonewswidget"
+    namespace = "com.tksapec.ywidget"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.example.yahoonewswidget"
+        applicationId = "com.tksapec.ywidget"
         minSdk = 26
         targetSdk = 35
         versionCode = 1
@@ -26,13 +24,6 @@ android {
 
     kotlinOptions {
         jvmTarget = "17"
-    }
-
-    applicationVariants.all {
-        outputs.all {
-            val output = this as BaseVariantOutputImpl
-            output.outputFileName = "YahooNewsWidget-v${versionName}-${name}.apk"
-        }
     }
 }
 

@@ -1,7 +1,7 @@
-package com.example.yahoonewswidget.network
+package com.tksapec.ywidget.network
 
-import com.example.yahoonewswidget.data.NewsCategory
-import com.example.yahoonewswidget.data.NewsItem
+import com.tksapec.ywidget.data.NewsCategory
+import com.tksapec.ywidget.data.NewsItem
 import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
@@ -14,7 +14,7 @@ class RssClient {
         connection.connectTimeout = 10_000
         connection.readTimeout = 10_000
         connection.requestMethod = "GET"
-        connection.setRequestProperty("User-Agent", "YahooNewsWidget/1.0")
+        connection.setRequestProperty("User-Agent", "YWidget/1.0")
 
         return connection.useInputStream { parse(it) }
     }

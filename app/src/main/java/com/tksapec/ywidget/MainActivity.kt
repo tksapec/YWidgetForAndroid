@@ -1,4 +1,4 @@
-package com.example.yahoonewswidget
+package com.tksapec.ywidget
 
 import android.Manifest
 import android.content.Context
@@ -43,14 +43,15 @@ import androidx.core.content.ContextCompat
 import androidx.glance.appwidget.updateAll
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
-import com.example.yahoonewswidget.data.DisplayStyle
-import com.example.yahoonewswidget.data.LauncherAppShortcut
-import com.example.yahoonewswidget.data.NewsCategory
-import com.example.yahoonewswidget.data.WeatherLocationMode
-import com.example.yahoonewswidget.data.WidgetPreferences
-import com.example.yahoonewswidget.data.WidgetSettings
-import com.example.yahoonewswidget.widget.YahooNewsWidget
-import com.example.yahoonewswidget.work.RefreshWorker
+import com.tksapec.ywidget.data.DisplayStyle
+import com.tksapec.ywidget.data.LauncherAppSlot
+import com.tksapec.ywidget.data.LauncherAppShortcut
+import com.tksapec.ywidget.data.NewsCategory
+import com.tksapec.ywidget.data.WeatherLocationMode
+import com.tksapec.ywidget.data.WidgetPreferences
+import com.tksapec.ywidget.data.WidgetSettings
+import com.tksapec.ywidget.widget.YWidget
+import com.tksapec.ywidget.work.RefreshWorker
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -80,13 +81,13 @@ class MainActivity : ComponentActivity() {
                         onDisplayCountSelected = { count ->
                             lifecycleScope.launch {
                                 preferences.updateDisplayCount(count)
-                                YahooNewsWidget().updateAll(this@MainActivity)
+                                YWidget().updateAll(this@MainActivity)
                             }
                         },
                         onDisplayStyleSelected = { style ->
                             lifecycleScope.launch {
                                 preferences.updateDisplayStyle(style)
-                                YahooNewsWidget().updateAll(this@MainActivity)
+                                YWidget().updateAll(this@MainActivity)
                             }
                         },
                         onIntervalSelected = { minutes ->
@@ -99,7 +100,7 @@ class MainActivity : ComponentActivity() {
                             lifecycleScope.launch {
                                 preferences.updateWeatherLocationMode(mode)
                                 if (mode == WeatherLocationMode.Disabled) {
-                                    YahooNewsWidget().updateAll(this@MainActivity)
+                                    YWidget().updateAll(this@MainActivity)
                                 } else {
                                     RefreshWorker.enqueueImmediate(this@MainActivity)
                                 }
@@ -112,10 +113,10 @@ class MainActivity : ComponentActivity() {
                                 RefreshWorker.enqueueImmediate(this@MainActivity)
                             }
                         },
-                        onLauncherAppsChanged = { apps ->
+                        onLauncherAppSlotsChanged = { slots ->
                             lifecycleScope.launch {
-                                preferences.updateLauncherApps(apps)
-                                YahooNewsWidget().updateAll(this@MainActivity)
+                                preferences.updateLauncherAppSlots(slots)
+                                YWidget().updateAll(this@MainActivity)
                             }
                         },
                     )
@@ -134,7 +135,7 @@ private fun SettingsScreen(
     onIntervalSelected: (Long) -> Unit,
     onWeatherLocationModeSelected: (WeatherLocationMode) -> Unit,
     onFixedLocationSaved: (String) -> Unit,
-    onLauncherAppsChanged: (List<LauncherAppShortcut>) -> Unit,
+    onLauncherAppSlotsChanged: (List<LauncherAppSlot>) -> Unit,
 ) {
     val context = LocalContext.current
     val launcherAppOptions = remember(context) { loadLauncherAppOptions(context) }
@@ -166,7 +167,7 @@ private fun SettingsScreen(
         verticalArrangement = Arrangement.spacedBy(18.dp),
     ) {
         Text(
-            text = "Yahoo!\u30CB\u30E5\u30FC\u30B9 \u30A6\u30A3\u30B8\u30A7\u30C3\u30C8\u8A2D\u5B9A",
+            text = "YWidget \u8A2D\u5B9A",
             style = MaterialTheme.typography.titleLarge,
         )
 
@@ -200,9 +201,9 @@ private fun SettingsScreen(
 
         SettingBlock(label = "\u30E9\u30F3\u30C1\u30E3\u30FC\u30DC\u30BF\u30F3") {
             LauncherAppSelector(
-                selectedApps = settings.launcherApps,
+                selectedSlots = settings.launcherAppSlots,
                 availableApps = launcherAppOptions,
-                onChanged = onLauncherAppsChanged,
+                onChanged = onLauncherAppSlotsChanged,
             )
         }
 
@@ -238,6 +239,13 @@ private fun SettingsScreen(
                 Text(
                     text = "\u8868\u793A\u4E2D: $label",
                     style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            settings.lastWeatherError?.takeIf { it.isNotBlank() }?.let { error ->
+                Text(
+                    text = "\u5929\u6C17\u66F4\u65B0\u30A8\u30E9\u30FC: $error",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
                 )
             }
         }
@@ -309,9 +317,9 @@ private fun CategorySelector(
 
 @Composable
 private fun LauncherAppSelector(
-    selectedApps: List<LauncherAppShortcut>,
+    selectedSlots: List<LauncherAppSlot>,
     availableApps: List<LauncherAppShortcut>,
-    onChanged: (List<LauncherAppShortcut>) -> Unit,
+    onChanged: (List<LauncherAppSlot>) -> Unit,
 ) {
     if (availableApps.isEmpty()) {
         Text(
@@ -322,7 +330,7 @@ private fun LauncherAppSelector(
     }
 
     repeat(3) { slotIndex ->
-        val selected = selectedApps.getOrNull(slotIndex)
+        val selected = selectedSlots.firstOrNull { it.slotIndex == slotIndex }?.app
         SettingRow(label = "\u30B9\u30ED\u30C3\u30C8${slotIndex + 1}") {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -331,14 +339,14 @@ private fun LauncherAppSelector(
                 LauncherAppMenu(
                     slotIndex = slotIndex,
                     selected = selected,
-                    selectedApps = selectedApps,
+                    selectedSlots = selectedSlots,
                     availableApps = availableApps,
                     onSelected = { app ->
-                        onChanged(updateLauncherAppSlot(selectedApps, slotIndex, app))
+                        onChanged(updateLauncherAppSlot(selectedSlots, slotIndex, app))
                     },
                 )
                 Button(
-                    onClick = { onChanged(updateLauncherAppSlot(selectedApps, slotIndex, null)) },
+                    onClick = { onChanged(updateLauncherAppSlot(selectedSlots, slotIndex, null)) },
                     enabled = selected != null,
                 ) {
                     Text("\u89E3\u9664")
@@ -352,13 +360,13 @@ private fun LauncherAppSelector(
 private fun LauncherAppMenu(
     slotIndex: Int,
     selected: LauncherAppShortcut?,
-    selectedApps: List<LauncherAppShortcut>,
+    selectedSlots: List<LauncherAppSlot>,
     availableApps: List<LauncherAppShortcut>,
     onSelected: (LauncherAppShortcut) -> Unit,
 ) {
-    val usedByOtherSlots = selectedApps
-        .filterIndexed { index, _ -> index != slotIndex }
-        .map { it.packageName }
+    val usedByOtherSlots = selectedSlots
+        .filter { it.slotIndex != slotIndex }
+        .mapNotNull { it.app?.packageName }
         .toSet()
     val selectableApps = availableApps.filter { it.packageName !in usedByOtherSlots }
     var expanded by remember { mutableStateOf(false) }
@@ -380,22 +388,23 @@ private fun LauncherAppMenu(
 }
 
 private fun updateLauncherAppSlot(
-    selectedApps: List<LauncherAppShortcut>,
+    selectedSlots: List<LauncherAppSlot>,
     slotIndex: Int,
     app: LauncherAppShortcut?,
-): List<LauncherAppShortcut> {
-    val next = selectedApps.toMutableList()
-    if (app == null) {
-        if (slotIndex in next.indices) next.removeAt(slotIndex)
-    } else if (slotIndex in next.indices) {
-        next[slotIndex] = app
-    } else {
-        next += app
+): List<LauncherAppSlot> {
+    val usedPackages = mutableSetOf<String>()
+    return (0..2).map { index ->
+        val nextApp = if (index == slotIndex) {
+            app
+        } else {
+            selectedSlots.firstOrNull { it.slotIndex == index }?.app
+        }?.takeIf {
+            it.displayName.isNotBlank() &&
+                it.packageName.isNotBlank() &&
+                usedPackages.add(it.packageName)
+        }
+        LauncherAppSlot(slotIndex = index, app = nextApp)
     }
-    return next
-        .filter { it.displayName.isNotBlank() && it.packageName.isNotBlank() }
-        .distinctBy { it.packageName }
-        .take(3)
 }
 
 @Composable

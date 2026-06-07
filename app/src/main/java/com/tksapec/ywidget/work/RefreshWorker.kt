@@ -1,4 +1,4 @@
-package com.example.yahoonewswidget.work
+package com.tksapec.ywidget.work
 
 import android.Manifest
 import android.content.Context
@@ -18,12 +18,12 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.BackoffPolicy
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
-import com.example.yahoonewswidget.data.WeatherLocationMode
-import com.example.yahoonewswidget.data.WidgetPreferences
-import com.example.yahoonewswidget.data.WidgetSettings
-import com.example.yahoonewswidget.network.RssClient
-import com.example.yahoonewswidget.network.WeatherClient
-import com.example.yahoonewswidget.widget.YahooNewsWidget
+import com.tksapec.ywidget.data.WeatherLocationMode
+import com.tksapec.ywidget.data.WidgetPreferences
+import com.tksapec.ywidget.data.WidgetSettings
+import com.tksapec.ywidget.network.RssClient
+import com.tksapec.ywidget.network.WeatherClient
+import com.tksapec.ywidget.widget.YWidget
 import java.io.IOException
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
@@ -32,7 +32,9 @@ import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import java.util.Locale
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 
@@ -48,46 +50,69 @@ class RefreshWorker(
 
         withContext(Dispatchers.IO) {
             val rssClient = RssClient()
-            runCatching {
-                settings.selectedCategories
-                    .flatMap { category -> rssClient.fetch(category) }
-                    .distinctBy { it.url }
-            }.onSuccess { news ->
-                if (news.isNotEmpty()) {
-                    preferences.saveNews(news, now)
-                } else {
+            preferences.updateNewsRefreshing(true)
+            YWidget().updateAll(applicationContext)
+            try {
+                runCatching {
+                    settings.selectedCategories
+                        .flatMap { category -> rssClient.fetch(category) }
+                        .distinctBy { it.url }
+                }.onSuccess { news ->
+                    if (news.isNotEmpty()) {
+                        preferences.saveNews(news, now)
+                    } else {
+                        preferences.saveNewsError("\u30CB\u30E5\u30FC\u30B9\u53D6\u5F97\u5931\u6557")
+                        retryNeeded = true
+                    }
+                }.onFailure { error ->
+                    if (error is CancellationException) throw error
                     preferences.saveNewsError("\u30CB\u30E5\u30FC\u30B9\u53D6\u5F97\u5931\u6557")
-                    retryNeeded = true
+                    if (error.isTransientFailure()) retryNeeded = true
                 }
-            }.onFailure { error ->
-                preferences.saveNewsError("\u30CB\u30E5\u30FC\u30B9\u53D6\u5F97\u5931\u6557")
-                if (error.isTransientFailure()) retryNeeded = true
+            } finally {
+                withContext(NonCancellable) {
+                    preferences.updateNewsRefreshing(false)
+                    YWidget().updateAll(applicationContext)
+                }
             }
 
             if (settings.weatherEnabled && settings.weatherLocationMode != WeatherLocationMode.Disabled) {
-                runCatching {
-                    resolveWeatherTarget(settings = settings, preferences = preferences)
-                }.onSuccess { target ->
+                preferences.updateWeatherRefreshing(true)
+                YWidget().updateAll(applicationContext)
+                try {
                     runCatching {
-                        WeatherClient().fetch(target.latitude, target.longitude)
-                    }.onSuccess { weather ->
-                        preferences.saveWeather(
-                            code = weather.code,
-                            temperatureCelsius = weather.temperatureCelsius,
-                            locationLabel = target.label,
-                            updatedAtMillis = now,
-                        )
+                        resolveWeatherTarget(settings = settings, preferences = preferences)
+                    }.onSuccess { target ->
+                        runCatching {
+                            WeatherClient().fetch(target.latitude, target.longitude)
+                        }.onSuccess { weather ->
+                            preferences.saveWeather(
+                                code = weather.code,
+                                temperatureCelsius = weather.temperatureCelsius,
+                                locationLabel = target.label,
+                                updatedAtMillis = now,
+                            )
+                        }.onFailure { error ->
+                            if (error is CancellationException) throw error
+                            preferences.saveWeatherError(error.message ?: "\u5929\u6C17\u53D6\u5F97\u5931\u6557")
+                            if (error.isTransientFailure()) retryNeeded = true
+                        }
                     }.onFailure { error ->
+                        if (error is CancellationException) throw error
                         preferences.saveWeatherError(error.message ?: "\u5929\u6C17\u53D6\u5F97\u5931\u6557")
-                        if (error.isTransientFailure()) retryNeeded = true
                     }
-                }.onFailure { error ->
-                    preferences.saveWeatherError(error.message ?: "\u5929\u6C17\u53D6\u5F97\u5931\u6557")
+                } finally {
+                    withContext(NonCancellable) {
+                        preferences.updateWeatherRefreshing(false)
+                        YWidget().updateAll(applicationContext)
+                    }
                 }
+            } else {
+                preferences.updateWeatherRefreshing(false)
             }
         }
 
-        YahooNewsWidget().updateAll(applicationContext)
+        YWidget().updateAll(applicationContext)
         return if (retryNeeded) Result.retry() else Result.success()
     }
 
@@ -99,7 +124,7 @@ class RefreshWorker(
     }
 
     private suspend fun resolveWeatherTarget(
-        settings: com.example.yahoonewswidget.data.WidgetSettings,
+        settings: WidgetSettings,
         preferences: WidgetPreferences,
     ): WeatherTarget {
         return when (settings.weatherLocationMode) {
@@ -126,7 +151,7 @@ class RefreshWorker(
     }
 
     private suspend fun resolveFixedLocation(
-        settings: com.example.yahoonewswidget.data.WidgetSettings,
+        settings: WidgetSettings,
         preferences: WidgetPreferences,
     ): WeatherTarget {
         val query = settings.fixedLocationQuery.trim()

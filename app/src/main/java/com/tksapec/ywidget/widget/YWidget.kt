@@ -1,4 +1,4 @@
-package com.example.yahoonewswidget.widget
+package com.tksapec.ywidget.widget
 
 import android.appwidget.AppWidgetManager
 import android.content.ActivityNotFoundException
@@ -43,13 +43,13 @@ import androidx.glance.text.Text
 import androidx.glance.text.TextAlign
 import androidx.glance.text.TextStyle
 import androidx.glance.unit.ColorProvider
-import com.example.yahoonewswidget.data.LauncherAppShortcut
-import com.example.yahoonewswidget.data.NewsItem
-import com.example.yahoonewswidget.data.WidgetPreferences
-import com.example.yahoonewswidget.data.WidgetSettings
-import com.example.yahoonewswidget.data.WeatherLocationMode
-import com.example.yahoonewswidget.data.weatherIconForCode
-import com.example.yahoonewswidget.work.RefreshWorker
+import com.tksapec.ywidget.data.LauncherAppShortcut
+import com.tksapec.ywidget.data.NewsItem
+import com.tksapec.ywidget.data.WidgetPreferences
+import com.tksapec.ywidget.data.WidgetSettings
+import com.tksapec.ywidget.data.WeatherLocationMode
+import com.tksapec.ywidget.data.weatherIconForCode
+import com.tksapec.ywidget.work.RefreshWorker
 import java.util.Calendar
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -58,19 +58,19 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
-class YahooNewsWidget : GlanceAppWidget() {
+class YWidget : GlanceAppWidget() {
     override val sizeMode: SizeMode = SizeMode.Exact
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
         val settings = WidgetPreferences(context).currentSettings()
         provideContent {
-            YahooNewsWidgetContent(settings = settings)
+            YWidgetContent(settings = settings)
         }
     }
 }
 
 @Composable
-private fun YahooNewsWidgetContent(settings: WidgetSettings) {
+private fun YWidgetContent(settings: WidgetSettings) {
     val style = settings.displayStyle
     Column(
         modifier = GlanceModifier
@@ -138,6 +138,32 @@ private fun WeatherText(settings: WidgetSettings) {
     if (settings.weatherLocationMode == WeatherLocationMode.Disabled) return
 
     val error = settings.lastWeatherError
+    if (settings.weatherRefreshing) {
+        Text(
+            text = "\u5929\u6C17\u66F4\u65B0\u4E2D...",
+            modifier = GlanceModifier.padding(end = 8.dp),
+            style = TextStyle(
+                color = ColorProvider(Color(0xFFB8B8B8)),
+                fontSize = 11.sp,
+            ),
+            maxLines = 1,
+        )
+        return
+    }
+
+    if (error != null && code != null && temperature != null) {
+        Text(
+            text = "\u6700\u7D42\u6210\u529F: ${formatUpdatedAt(settings.weatherUpdatedAtMillis)} / \u5929\u6C17\u66F4\u65B0\u5931\u6557",
+            modifier = GlanceModifier.padding(end = 8.dp),
+            style = TextStyle(
+                color = ColorProvider(Color(0xFFFFC268)),
+                fontSize = 10.sp,
+            ),
+            maxLines = 1,
+        )
+        return
+    }
+
     if (!settings.weatherEnabled || code == null || temperature == null) {
         if (error != null) {
             Text(
@@ -172,16 +198,23 @@ private fun BottomActions(settings: WidgetSettings) {
         modifier = GlanceModifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        settings.launcherApps.take(3).forEach { app ->
-            LauncherAppButton(app)
-        }
+        settings.launcherAppSlots
+            .sortedBy { it.slotIndex }
+            .mapNotNull { it.app }
+            .forEach { app -> LauncherAppButton(app) }
         Text(
             text = statusText(settings),
             modifier = GlanceModifier
                 .defaultWeight()
                 .padding(horizontal = 6.dp),
             style = TextStyle(
-                color = ColorProvider(if (settings.lastNewsError == null) Color(0xFFB8B8B8) else Color(0xFFFFC268)),
+                color = ColorProvider(
+                    if (settings.lastNewsError == null && !settings.newsRefreshing) {
+                        Color(0xFFB8B8B8)
+                    } else {
+                        Color(0xFFFFC268)
+                    },
+                ),
                 fontSize = 10.sp,
                 textAlign = TextAlign.End,
             ),
@@ -233,7 +266,7 @@ private fun ColumnScope.NewsList(settings: WidgetSettings) {
             contentAlignment = Alignment.Center,
         ) {
             Text(
-                text = "\u53D6\u5F97\u4E2D",
+                text = if (settings.newsRefreshing) "\u30CB\u30E5\u30FC\u30B9\u66F4\u65B0\u4E2D..." else "\u53D6\u5F97\u4E2D",
                 style = TextStyle(
                     color = ColorProvider(Color(0xFFE4E4E4)),
                     fontSize = 13.sp,
@@ -286,8 +319,13 @@ private fun openLauncherAppAction(packageName: String) = actionRunCallback<OpenL
 )
 
 private fun statusText(settings: WidgetSettings): String {
-    val updatedAt = "\u66F4\u65B0: ${formatUpdatedAt(settings.newsUpdatedAtMillis)}"
-    return settings.lastNewsError?.let { "$updatedAt  $it" } ?: updatedAt
+    if (settings.newsRefreshing) return "\u30CB\u30E5\u30FC\u30B9\u66F4\u65B0\u4E2D..."
+    val updatedAt = formatUpdatedAt(settings.newsUpdatedAtMillis)
+    return if (settings.lastNewsError == null) {
+        "\u66F4\u65B0: $updatedAt"
+    } else {
+        "\u6700\u7D42\u6210\u529F: $updatedAt / \u66F4\u65B0\u5931\u6557"
+    }
 }
 
 private fun formatUpdatedAt(updatedAtMillis: Long): String {
@@ -368,8 +406,8 @@ class OpenLauncherAppAction : ActionCallback {
     }
 }
 
-class YahooNewsWidgetReceiver : GlanceAppWidgetReceiver() {
-    override val glanceAppWidget: GlanceAppWidget = YahooNewsWidget()
+class YWidgetReceiver : GlanceAppWidgetReceiver() {
+    override val glanceAppWidget: GlanceAppWidget = YWidget()
 
     override fun onEnabled(context: Context) {
         super.onEnabled(context)
@@ -402,13 +440,14 @@ class YahooNewsWidgetReceiver : GlanceAppWidgetReceiver() {
         val pendingResult = goAsync()
         CoroutineScope(Dispatchers.Default).launch {
             try {
+                // Periodic refresh is owned by WorkManager; AppWidgetProvider only registers and kicks due work.
                 RefreshWorker.schedulePeriodicFromSettings(context.applicationContext)
                 if (refreshImmediately) {
                     RefreshWorker.enqueueImmediate(context.applicationContext)
                 } else {
                     RefreshWorker.enqueueImmediateIfDueFromSettings(context.applicationContext)
                 }
-                YahooNewsWidget().updateAll(context.applicationContext)
+                YWidget().updateAll(context.applicationContext)
             } finally {
                 pendingResult.finish()
             }
@@ -418,7 +457,7 @@ class YahooNewsWidgetReceiver : GlanceAppWidgetReceiver() {
 
 private fun Context.hasPlacedWidgets(): Boolean {
     val appWidgetManager = AppWidgetManager.getInstance(this)
-    val componentName = ComponentName(this, YahooNewsWidgetReceiver::class.java)
+    val componentName = ComponentName(this, YWidgetReceiver::class.java)
     return appWidgetManager.getAppWidgetIds(componentName).isNotEmpty()
 }
 

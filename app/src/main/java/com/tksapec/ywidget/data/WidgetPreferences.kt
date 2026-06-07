@@ -1,4 +1,4 @@
-package com.example.yahoonewswidget.data
+package com.tksapec.ywidget.data
 
 import android.content.Context
 import androidx.datastore.preferences.core.booleanPreferencesKey
@@ -32,14 +32,10 @@ class WidgetPreferences(private val context: Context) {
         val news = runCatching {
             if (newsJson.isBlank()) emptyList() else json.decodeFromString<List<NewsItem>>(newsJson)
         }.getOrDefault(emptyList())
-        val launcherAppsJson = preferences[Keys.launcherAppsJson].orEmpty()
-        val launcherApps = runCatching {
-            if (launcherAppsJson.isBlank()) {
-                emptyList()
-            } else {
-                json.decodeFromString<List<LauncherAppShortcut>>(launcherAppsJson)
-            }
-        }.getOrDefault(emptyList())
+        val launcherAppSlots = decodeLauncherAppSlots(
+            slotsJson = preferences[Keys.launcherAppSlotsJson],
+            legacyAppsJson = preferences[Keys.launcherAppsJson],
+        )
 
         WidgetSettings(
             category = category,
@@ -49,9 +45,10 @@ class WidgetPreferences(private val context: Context) {
             updateIntervalMinutes = preferences[Keys.updateIntervalMinutes] ?: 60L,
             news = news,
             newsUpdatedAtMillis = preferences[Keys.newsUpdatedAtMillis] ?: 0L,
-            weatherEnabled = preferences[Keys.weatherEnabled] ?: true,
+            newsRefreshing = preferences[Keys.newsRefreshing] ?: false,
+            weatherEnabled = preferences[Keys.weatherEnabled] ?: false,
             weatherLocationMode = WeatherLocationMode.fromName(
-                preferences[Keys.weatherLocationMode] ?: WeatherLocationMode.Current.name,
+                preferences[Keys.weatherLocationMode] ?: WeatherLocationMode.Disabled.name,
             ),
             locationLabel = preferences[Keys.locationLabel],
             fixedLocationQuery = preferences[Keys.fixedLocationQuery].orEmpty(),
@@ -60,9 +57,10 @@ class WidgetPreferences(private val context: Context) {
             weatherCode = preferences[Keys.weatherCode],
             temperatureCelsius = preferences[Keys.temperatureCelsius],
             weatherUpdatedAtMillis = preferences[Keys.weatherUpdatedAtMillis] ?: 0L,
+            weatherRefreshing = preferences[Keys.weatherRefreshing] ?: false,
             lastNewsError = preferences[Keys.lastNewsError],
             lastWeatherError = preferences[Keys.lastWeatherError],
-            launcherApps = normalizeLauncherApps(launcherApps),
+            launcherAppSlots = launcherAppSlots,
         )
     }
 
@@ -130,12 +128,20 @@ class WidgetPreferences(private val context: Context) {
         context.widgetDataStore.edit {
             it[Keys.newsJson] = json.encodeToString(news)
             it[Keys.newsUpdatedAtMillis] = updatedAtMillis
+            it[Keys.newsRefreshing] = false
             it.remove(Keys.lastNewsError)
         }
     }
 
     suspend fun saveNewsError(message: String) {
-        context.widgetDataStore.edit { it[Keys.lastNewsError] = message }
+        context.widgetDataStore.edit {
+            it[Keys.lastNewsError] = message
+            it[Keys.newsRefreshing] = false
+        }
+    }
+
+    suspend fun updateNewsRefreshing(refreshing: Boolean) {
+        context.widgetDataStore.edit { it[Keys.newsRefreshing] = refreshing }
     }
 
     suspend fun saveWeather(
@@ -149,17 +155,26 @@ class WidgetPreferences(private val context: Context) {
             it[Keys.temperatureCelsius] = temperatureCelsius
             locationLabel?.let { label -> it[Keys.locationLabel] = label }
             it[Keys.weatherUpdatedAtMillis] = updatedAtMillis
+            it[Keys.weatherRefreshing] = false
             it.remove(Keys.lastWeatherError)
         }
     }
 
     suspend fun saveWeatherError(message: String) {
-        context.widgetDataStore.edit { it[Keys.lastWeatherError] = message }
+        context.widgetDataStore.edit {
+            it[Keys.lastWeatherError] = message
+            it[Keys.weatherRefreshing] = false
+        }
     }
 
-    suspend fun updateLauncherApps(apps: List<LauncherAppShortcut>) {
+    suspend fun updateWeatherRefreshing(refreshing: Boolean) {
+        context.widgetDataStore.edit { it[Keys.weatherRefreshing] = refreshing }
+    }
+
+    suspend fun updateLauncherAppSlots(slots: List<LauncherAppSlot>) {
         context.widgetDataStore.edit {
-            it[Keys.launcherAppsJson] = json.encodeToString(normalizeLauncherApps(apps))
+            it[Keys.launcherAppSlotsJson] = json.encodeToString(normalizeLauncherAppSlots(slots))
+            it.remove(Keys.launcherAppsJson)
         }
     }
 
@@ -176,11 +191,51 @@ class WidgetPreferences(private val context: Context) {
         return NewsCategory.entries.filter { it in categories }
     }
 
-    private fun normalizeLauncherApps(apps: List<LauncherAppShortcut>): List<LauncherAppShortcut> {
-        return apps
-            .filter { it.displayName.isNotBlank() && it.packageName.isNotBlank() }
-            .distinctBy { it.packageName }
-            .take(3)
+    private fun decodeLauncherAppSlots(
+        slotsJson: String?,
+        legacyAppsJson: String?,
+    ): List<LauncherAppSlot> {
+        val slots = runCatching {
+            if (slotsJson.isNullOrBlank()) {
+                emptyList()
+            } else {
+                json.decodeFromString<List<LauncherAppSlot>>(slotsJson)
+            }
+        }.getOrDefault(emptyList())
+        if (slots.isNotEmpty()) return normalizeLauncherAppSlots(slots)
+
+        val legacyApps = runCatching {
+            if (legacyAppsJson.isNullOrBlank()) {
+                emptyList()
+            } else {
+                json.decodeFromString<List<LauncherAppShortcut>>(legacyAppsJson)
+            }
+        }.getOrDefault(emptyList())
+
+        return normalizeLauncherAppSlots(
+            legacyApps
+                .filter { it.displayName.isNotBlank() && it.packageName.isNotBlank() }
+                .distinctBy { it.packageName }
+                .take(3)
+                .mapIndexed { index, app -> LauncherAppSlot(slotIndex = index, app = app) },
+        )
+    }
+
+    private fun normalizeLauncherAppSlots(slots: List<LauncherAppSlot>): List<LauncherAppSlot> {
+        val usedPackages = mutableSetOf<String>()
+        val byIndex = slots
+            .filter { it.slotIndex in 0..2 }
+            .sortedBy { it.slotIndex }
+            .associateBy { it.slotIndex }
+
+        return (0..2).map { slotIndex ->
+            val app = byIndex[slotIndex]?.app?.takeIf {
+                it.displayName.isNotBlank() &&
+                    it.packageName.isNotBlank() &&
+                    usedPackages.add(it.packageName)
+            }
+            LauncherAppSlot(slotIndex = slotIndex, app = app)
+        }
     }
 
     private object Keys {
@@ -191,6 +246,7 @@ class WidgetPreferences(private val context: Context) {
         val updateIntervalMinutes = longPreferencesKey("update_interval_minutes")
         val newsJson = stringPreferencesKey("news_json")
         val newsUpdatedAtMillis = longPreferencesKey("news_updated_at_millis")
+        val newsRefreshing = booleanPreferencesKey("news_refreshing")
         val weatherEnabled = booleanPreferencesKey("weather_enabled")
         val weatherLocationMode = stringPreferencesKey("weather_location_mode")
         val locationLabel = stringPreferencesKey("location_label")
@@ -200,8 +256,10 @@ class WidgetPreferences(private val context: Context) {
         val weatherCode = intPreferencesKey("weather_code")
         val temperatureCelsius = doublePreferencesKey("temperature_celsius")
         val weatherUpdatedAtMillis = longPreferencesKey("weather_updated_at_millis")
+        val weatherRefreshing = booleanPreferencesKey("weather_refreshing")
         val lastNewsError = stringPreferencesKey("last_news_error")
         val lastWeatherError = stringPreferencesKey("last_weather_error")
+        val launcherAppSlotsJson = stringPreferencesKey("launcher_app_slots_json")
         val launcherAppsJson = stringPreferencesKey("launcher_apps_json")
     }
 }
