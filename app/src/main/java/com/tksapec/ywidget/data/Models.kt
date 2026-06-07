@@ -49,6 +49,23 @@ fun emptyLauncherAppSlots(): List<LauncherAppSlot> = (0..2).map { slotIndex ->
     LauncherAppSlot(slotIndex = slotIndex)
 }
 
+fun normalizeLauncherAppSlots(slots: List<LauncherAppSlot>): List<LauncherAppSlot> {
+    val usedPackages = mutableSetOf<String>()
+    val byIndex = slots
+        .filter { it.slotIndex in 0..2 }
+        .sortedBy { it.slotIndex }
+        .associateBy { it.slotIndex }
+
+    return (0..2).map { slotIndex ->
+        val app = byIndex[slotIndex]?.app?.takeIf {
+            it.displayName.isNotBlank() &&
+                it.packageName.isNotBlank() &&
+                usedPackages.add(it.packageName)
+        }
+        LauncherAppSlot(slotIndex = slotIndex, app = app)
+    }
+}
+
 fun WidgetSettings.isRefreshDue(now: Long): Boolean {
     val intervalMillis = updateIntervalMinutes.coerceAtLeast(1L) * 60_000L
     val newsDue = newsUpdatedAtMillis <= 0L || now - newsUpdatedAtMillis >= intervalMillis

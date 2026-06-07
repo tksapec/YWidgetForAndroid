@@ -130,7 +130,6 @@ class WidgetPreferences(private val context: Context) {
             it[Keys.newsJson] = json.encodeToString(news)
             it[Keys.newsUpdatedAtMillis] = updatedAtMillis
             it[Keys.newsRefreshing] = false
-            it[Keys.refreshQueued] = false
             it.remove(Keys.lastNewsError)
         }
     }
@@ -139,7 +138,6 @@ class WidgetPreferences(private val context: Context) {
         context.widgetDataStore.edit {
             it[Keys.lastNewsError] = message
             it[Keys.newsRefreshing] = false
-            it[Keys.refreshQueued] = false
         }
     }
 
@@ -179,6 +177,14 @@ class WidgetPreferences(private val context: Context) {
 
     suspend fun updateWeatherRefreshing(refreshing: Boolean) {
         context.widgetDataStore.edit { it[Keys.weatherRefreshing] = refreshing }
+    }
+
+    suspend fun clearRefreshState() {
+        context.widgetDataStore.edit {
+            it[Keys.refreshQueued] = false
+            it[Keys.newsRefreshing] = false
+            it[Keys.weatherRefreshing] = false
+        }
     }
 
     suspend fun updateLauncherAppSlots(slots: List<LauncherAppSlot>) {
@@ -229,23 +235,6 @@ class WidgetPreferences(private val context: Context) {
                 .take(3)
                 .mapIndexed { index, app -> LauncherAppSlot(slotIndex = index, app = app) },
         )
-    }
-
-    private fun normalizeLauncherAppSlots(slots: List<LauncherAppSlot>): List<LauncherAppSlot> {
-        val usedPackages = mutableSetOf<String>()
-        val byIndex = slots
-            .filter { it.slotIndex in 0..2 }
-            .sortedBy { it.slotIndex }
-            .associateBy { it.slotIndex }
-
-        return (0..2).map { slotIndex ->
-            val app = byIndex[slotIndex]?.app?.takeIf {
-                it.displayName.isNotBlank() &&
-                    it.packageName.isNotBlank() &&
-                    usedPackages.add(it.packageName)
-            }
-            LauncherAppSlot(slotIndex = slotIndex, app = app)
-        }
     }
 
     private object Keys {

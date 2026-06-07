@@ -451,7 +451,7 @@ class YWidgetReceiver : GlanceAppWidgetReceiver() {
         val pendingResult = goAsync()
         CoroutineScope(Dispatchers.Default).launch {
             try {
-                WidgetPreferences(context.applicationContext).updateRefreshQueued(false)
+                WidgetPreferences(context.applicationContext).clearRefreshState()
             } finally {
                 pendingResult.finish()
             }
