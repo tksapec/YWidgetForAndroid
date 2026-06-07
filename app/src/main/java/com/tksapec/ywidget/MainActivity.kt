@@ -1,6 +1,8 @@
 package com.tksapec.ywidget
 
 import android.Manifest
+import android.appwidget.AppWidgetManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -51,6 +53,7 @@ import com.tksapec.ywidget.data.WeatherLocationMode
 import com.tksapec.ywidget.data.WidgetPreferences
 import com.tksapec.ywidget.data.WidgetSettings
 import com.tksapec.ywidget.widget.YWidget
+import com.tksapec.ywidget.widget.YWidgetReceiver
 import com.tksapec.ywidget.work.RefreshWorker
 import kotlinx.coroutines.launch
 
@@ -59,9 +62,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        lifecycleScope.launch {
-            RefreshWorker.schedulePeriodicFromSettings(this@MainActivity)
-        }
 
         setContent {
             val settings by preferences.settingsFlow.collectAsStateWithLifecycle(
@@ -75,7 +75,7 @@ class MainActivity : ComponentActivity() {
                         onCategoriesChanged = { categories ->
                             lifecycleScope.launch {
                                 preferences.updateSelectedCategories(categories)
-                                RefreshWorker.enqueueImmediate(this@MainActivity)
+                                enqueueImmediateRefresh()
                             }
                         },
                         onDisplayCountSelected = { count ->
@@ -93,7 +93,9 @@ class MainActivity : ComponentActivity() {
                         onIntervalSelected = { minutes ->
                             lifecycleScope.launch {
                                 preferences.updateInterval(minutes)
-                                RefreshWorker.schedulePeriodicFromSettings(this@MainActivity)
+                                if (this@MainActivity.hasPlacedWidgets()) {
+                                    RefreshWorker.schedulePeriodicFromSettings(this@MainActivity)
+                                }
                             }
                         },
                         onWeatherLocationModeSelected = { mode ->
@@ -102,7 +104,7 @@ class MainActivity : ComponentActivity() {
                                 if (mode == WeatherLocationMode.Disabled) {
                                     YWidget().updateAll(this@MainActivity)
                                 } else {
-                                    RefreshWorker.enqueueImmediate(this@MainActivity)
+                                    enqueueImmediateRefresh()
                                 }
                             }
                         },
@@ -110,7 +112,7 @@ class MainActivity : ComponentActivity() {
                             lifecycleScope.launch {
                                 preferences.updateFixedLocationQuery(query)
                                 preferences.updateWeatherLocationMode(WeatherLocationMode.Fixed)
-                                RefreshWorker.enqueueImmediate(this@MainActivity)
+                                enqueueImmediateRefresh()
                             }
                         },
                         onLauncherAppSlotsChanged = { slots ->
@@ -123,6 +125,12 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    private suspend fun enqueueImmediateRefresh() {
+        preferences.updateRefreshQueued(true)
+        YWidget().updateAll(this)
+        RefreshWorker.enqueueImmediate(this)
     }
 }
 
@@ -321,7 +329,7 @@ private fun LauncherAppSelector(
     availableApps: List<LauncherAppShortcut>,
     onChanged: (List<LauncherAppSlot>) -> Unit,
 ) {
-    if (availableApps.isEmpty()) {
+    if (availableApps.isEmpty() && selectedSlots.none { it.app != null }) {
         Text(
             text = "\u8D77\u52D5\u53EF\u80FD\u306A\u30A2\u30D7\u30EA\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093",
             style = MaterialTheme.typography.bodySmall,
@@ -329,8 +337,10 @@ private fun LauncherAppSelector(
         return
     }
 
+    val installedPackageNames = availableApps.map { it.packageName }.toSet()
     repeat(3) { slotIndex ->
         val selected = selectedSlots.firstOrNull { it.slotIndex == slotIndex }?.app
+        val selectedInstalled = selected == null || selected.packageName in installedPackageNames
         SettingRow(label = "\u30B9\u30ED\u30C3\u30C8${slotIndex + 1}") {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -339,6 +349,7 @@ private fun LauncherAppSelector(
                 LauncherAppMenu(
                     slotIndex = slotIndex,
                     selected = selected,
+                    selectedInstalled = selectedInstalled,
                     selectedSlots = selectedSlots,
                     availableApps = availableApps,
                     onSelected = { app ->
@@ -360,6 +371,7 @@ private fun LauncherAppSelector(
 private fun LauncherAppMenu(
     slotIndex: Int,
     selected: LauncherAppShortcut?,
+    selectedInstalled: Boolean,
     selectedSlots: List<LauncherAppSlot>,
     availableApps: List<LauncherAppShortcut>,
     onSelected: (LauncherAppShortcut) -> Unit,
@@ -372,7 +384,18 @@ private fun LauncherAppMenu(
     var expanded by remember { mutableStateOf(false) }
 
     OutlinedButton(onClick = { expanded = true }) {
-        Text(selected?.displayName ?: "\u672A\u767B\u9332")
+        Text(
+            text = when {
+                selected == null -> "\u672A\u767B\u9332"
+                selectedInstalled -> selected.displayName
+                else -> "\u672A\u30A4\u30F3\u30B9\u30C8\u30FC\u30EB: ${selected.displayName}"
+            },
+            color = if (selectedInstalled) {
+                MaterialTheme.colorScheme.onSurface
+            } else {
+                MaterialTheme.colorScheme.error
+            },
+        )
     }
     DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
         selectableApps.forEach { app ->
@@ -444,6 +467,12 @@ private fun loadLauncherAppOptions(context: Context): List<LauncherAppShortcut> 
         }
         .distinctBy { it.packageName }
         .sortedBy { it.displayName.lowercase() }
+}
+
+private fun Context.hasPlacedWidgets(): Boolean {
+    val appWidgetManager = AppWidgetManager.getInstance(this)
+    val componentName = ComponentName(this, YWidgetReceiver::class.java)
+    return appWidgetManager.getAppWidgetIds(componentName).isNotEmpty()
 }
 
 @Composable

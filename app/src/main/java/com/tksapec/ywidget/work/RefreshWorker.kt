@@ -21,6 +21,7 @@ import androidx.work.WorkerParameters
 import com.tksapec.ywidget.data.WeatherLocationMode
 import com.tksapec.ywidget.data.WidgetPreferences
 import com.tksapec.ywidget.data.WidgetSettings
+import com.tksapec.ywidget.data.isRefreshDue
 import com.tksapec.ywidget.network.RssClient
 import com.tksapec.ywidget.network.WeatherClient
 import com.tksapec.ywidget.widget.YWidget
@@ -213,6 +214,10 @@ class RefreshWorker(
         private const val BACKOFF_MINUTES = 10L
 
         fun enqueueImmediate(context: Context) {
+            enqueueImmediate(context, ExistingWorkPolicy.KEEP)
+        }
+
+        fun enqueueImmediate(context: Context, existingWorkPolicy: ExistingWorkPolicy) {
             val request = OneTimeWorkRequestBuilder<RefreshWorker>()
                 .setConstraints(networkConstraints())
                 .setBackoffCriteria(BackoffPolicy.LINEAR, BACKOFF_MINUTES, TimeUnit.MINUTES)
@@ -220,7 +225,7 @@ class RefreshWorker(
                 .build()
             WorkManager.getInstance(context).enqueueUniqueWork(
                 UNIQUE_REFRESH_WORK,
-                ExistingWorkPolicy.REPLACE,
+                existingWorkPolicy,
                 request,
             )
         }
@@ -239,7 +244,7 @@ class RefreshWorker(
 
         fun schedulePeriodic(context: Context, intervalMinutes: Long) {
             val safeIntervalMinutes = intervalMinutes.coerceAtLeast(15L)
-            val request = PeriodicWorkRequestBuilder<RefreshWorker>(
+            val request = PeriodicWorkRequestBuilder<RefreshTriggerWorker>(
                 safeIntervalMinutes,
                 TimeUnit.MINUTES,
             )
@@ -254,15 +259,15 @@ class RefreshWorker(
             )
         }
 
-        private fun networkConstraints(): Constraints = Constraints.Builder()
+        fun cancelAll(context: Context) {
+            val workManager = WorkManager.getInstance(context)
+            workManager.cancelUniqueWork(UNIQUE_REFRESH_WORK)
+            workManager.cancelUniqueWork(UNIQUE_PERIODIC_WORK)
+        }
+
+        internal fun networkConstraints(): Constraints = Constraints.Builder()
             .setRequiredNetworkType(NetworkType.CONNECTED)
             .build()
-
-        private fun WidgetSettings.isRefreshDue(now: Long): Boolean {
-            if (newsUpdatedAtMillis <= 0L) return true
-            val intervalMillis = updateIntervalMinutes.coerceAtLeast(1L) * 60_000L
-            return now - newsUpdatedAtMillis >= intervalMillis
-        }
 
         private fun Throwable.isTransientFailure(): Boolean {
             if (this is SocketTimeoutException || this is UnknownHostException || this is IOException) {

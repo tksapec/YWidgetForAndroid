@@ -46,6 +46,7 @@ class WidgetPreferences(private val context: Context) {
             news = news,
             newsUpdatedAtMillis = preferences[Keys.newsUpdatedAtMillis] ?: 0L,
             newsRefreshing = preferences[Keys.newsRefreshing] ?: false,
+            refreshQueued = preferences[Keys.refreshQueued] ?: false,
             weatherEnabled = preferences[Keys.weatherEnabled] ?: false,
             weatherLocationMode = WeatherLocationMode.fromName(
                 preferences[Keys.weatherLocationMode] ?: WeatherLocationMode.Disabled.name,
@@ -129,6 +130,7 @@ class WidgetPreferences(private val context: Context) {
             it[Keys.newsJson] = json.encodeToString(news)
             it[Keys.newsUpdatedAtMillis] = updatedAtMillis
             it[Keys.newsRefreshing] = false
+            it[Keys.refreshQueued] = false
             it.remove(Keys.lastNewsError)
         }
     }
@@ -137,11 +139,19 @@ class WidgetPreferences(private val context: Context) {
         context.widgetDataStore.edit {
             it[Keys.lastNewsError] = message
             it[Keys.newsRefreshing] = false
+            it[Keys.refreshQueued] = false
         }
     }
 
     suspend fun updateNewsRefreshing(refreshing: Boolean) {
-        context.widgetDataStore.edit { it[Keys.newsRefreshing] = refreshing }
+        context.widgetDataStore.edit {
+            it[Keys.newsRefreshing] = refreshing
+            if (refreshing) it[Keys.refreshQueued] = false
+        }
+    }
+
+    suspend fun updateRefreshQueued(queued: Boolean) {
+        context.widgetDataStore.edit { it[Keys.refreshQueued] = queued }
     }
 
     suspend fun saveWeather(
@@ -247,6 +257,7 @@ class WidgetPreferences(private val context: Context) {
         val newsJson = stringPreferencesKey("news_json")
         val newsUpdatedAtMillis = longPreferencesKey("news_updated_at_millis")
         val newsRefreshing = booleanPreferencesKey("news_refreshing")
+        val refreshQueued = booleanPreferencesKey("refresh_queued")
         val weatherEnabled = booleanPreferencesKey("weather_enabled")
         val weatherLocationMode = stringPreferencesKey("weather_location_mode")
         val locationLabel = stringPreferencesKey("location_label")

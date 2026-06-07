@@ -17,6 +17,7 @@ data class WidgetSettings(
     val news: List<NewsItem> = emptyList(),
     val newsUpdatedAtMillis: Long = 0L,
     val newsRefreshing: Boolean = false,
+    val refreshQueued: Boolean = false,
     val weatherEnabled: Boolean = false,
     val weatherLocationMode: WeatherLocationMode = WeatherLocationMode.Disabled,
     val locationLabel: String? = null,
@@ -46,6 +47,15 @@ data class LauncherAppSlot(
 
 fun emptyLauncherAppSlots(): List<LauncherAppSlot> = (0..2).map { slotIndex ->
     LauncherAppSlot(slotIndex = slotIndex)
+}
+
+fun WidgetSettings.isRefreshDue(now: Long): Boolean {
+    val intervalMillis = updateIntervalMinutes.coerceAtLeast(1L) * 60_000L
+    val newsDue = newsUpdatedAtMillis <= 0L || now - newsUpdatedAtMillis >= intervalMillis
+    val weatherDue = weatherEnabled &&
+        weatherLocationMode != WeatherLocationMode.Disabled &&
+        (weatherUpdatedAtMillis <= 0L || now - weatherUpdatedAtMillis >= intervalMillis)
+    return newsDue || weatherDue
 }
 
 enum class DisplayStyle(

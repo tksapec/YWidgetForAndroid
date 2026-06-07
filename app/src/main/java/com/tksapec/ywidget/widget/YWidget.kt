@@ -5,6 +5,7 @@ import android.content.ActivityNotFoundException
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
@@ -12,6 +13,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.glance.GlanceId
 import androidx.glance.GlanceModifier
+import androidx.glance.LocalContext
 import androidx.glance.action.ActionParameters
 import androidx.glance.action.actionParametersOf
 import androidx.glance.action.clickable
@@ -194,6 +196,7 @@ private fun WeatherText(settings: WidgetSettings) {
 
 @Composable
 private fun BottomActions(settings: WidgetSettings) {
+    val packageManager = LocalContext.current.packageManager
     Row(
         modifier = GlanceModifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -201,6 +204,14 @@ private fun BottomActions(settings: WidgetSettings) {
         settings.launcherAppSlots
             .sortedBy { it.slotIndex }
             .mapNotNull { it.app }
+            .filter { app ->
+                try {
+                    packageManager.getPackageInfo(app.packageName, 0)
+                    true
+                } catch (_: PackageManager.NameNotFoundException) {
+                    false
+                }
+            }
             .forEach { app -> LauncherAppButton(app) }
         Text(
             text = statusText(settings),
@@ -209,7 +220,7 @@ private fun BottomActions(settings: WidgetSettings) {
                 .padding(horizontal = 6.dp),
             style = TextStyle(
                 color = ColorProvider(
-                    if (settings.lastNewsError == null && !settings.newsRefreshing) {
+                    if (settings.lastNewsError == null && !settings.newsRefreshing && !settings.refreshQueued) {
                         Color(0xFFB8B8B8)
                     } else {
                         Color(0xFFFFC268)
@@ -266,7 +277,7 @@ private fun ColumnScope.NewsList(settings: WidgetSettings) {
             contentAlignment = Alignment.Center,
         ) {
             Text(
-                text = if (settings.newsRefreshing) "\u30CB\u30E5\u30FC\u30B9\u66F4\u65B0\u4E2D..." else "\u53D6\u5F97\u4E2D",
+                text = emptyNewsText(settings),
                 style = TextStyle(
                     color = ColorProvider(Color(0xFFE4E4E4)),
                     fontSize = 13.sp,
@@ -320,12 +331,21 @@ private fun openLauncherAppAction(packageName: String) = actionRunCallback<OpenL
 
 private fun statusText(settings: WidgetSettings): String {
     if (settings.newsRefreshing) return "\u30CB\u30E5\u30FC\u30B9\u66F4\u65B0\u4E2D..."
+    if (settings.refreshQueued) return "\u66F4\u65B0\u4E88\u7D04\u4E2D..."
+    if (settings.lastNewsError != null && settings.newsUpdatedAtMillis <= 0L) return "\u66F4\u65B0\u5931\u6557"
     val updatedAt = formatUpdatedAt(settings.newsUpdatedAtMillis)
     return if (settings.lastNewsError == null) {
         "\u66F4\u65B0: $updatedAt"
     } else {
         "\u6700\u7D42\u6210\u529F: $updatedAt / \u66F4\u65B0\u5931\u6557"
     }
+}
+
+private fun emptyNewsText(settings: WidgetSettings): String {
+    if (settings.newsRefreshing) return "\u30CB\u30E5\u30FC\u30B9\u66F4\u65B0\u4E2D..."
+    if (settings.refreshQueued) return "\u66F4\u65B0\u4E88\u7D04\u4E2D..."
+    if (settings.lastNewsError != null) return "\u30CB\u30E5\u30FC\u30B9\u53D6\u5F97\u5931\u6557"
+    return "\u53D6\u5F97\u4E2D"
 }
 
 private fun formatUpdatedAt(updatedAtMillis: Long): String {
@@ -350,6 +370,8 @@ class RefreshAction : ActionCallback {
         glanceId: GlanceId,
         parameters: ActionParameters,
     ) {
+        WidgetPreferences(context).updateRefreshQueued(true)
+        YWidget().updateAll(context)
         RefreshWorker.enqueueImmediate(context)
     }
 }
@@ -421,6 +443,19 @@ class YWidgetReceiver : GlanceAppWidgetReceiver() {
     ) {
         super.onUpdate(context, appWidgetManager, appWidgetIds)
         runWidgetRefreshSetup(context, refreshImmediately = false)
+    }
+
+    override fun onDisabled(context: Context) {
+        super.onDisabled(context)
+        RefreshWorker.cancelAll(context.applicationContext)
+        val pendingResult = goAsync()
+        CoroutineScope(Dispatchers.Default).launch {
+            try {
+                WidgetPreferences(context.applicationContext).updateRefreshQueued(false)
+            } finally {
+                pendingResult.finish()
+            }
+        }
     }
 
     override fun onReceive(context: Context, intent: Intent) {
