@@ -111,6 +111,10 @@ fun WidgetSettings.isRefreshQueuedActive(now: Long): Boolean {
     return refreshQueued && isRefreshStateActive(now)
 }
 
+fun WidgetSettings.shouldCleanupStaleRefreshQueue(now: Long): Boolean {
+    return refreshQueued && !isRefreshStateActive(now)
+}
+
 private fun WidgetSettings.isRefreshStateActive(now: Long): Boolean {
     return refreshStartedAtMillis > 0L &&
         now - refreshStartedAtMillis < REFRESH_ACTIVE_TIMEOUT_MILLIS

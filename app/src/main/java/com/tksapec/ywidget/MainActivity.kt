@@ -53,6 +53,7 @@ import com.tksapec.ywidget.data.WidgetPreferences
 import com.tksapec.ywidget.data.WidgetSettings
 import com.tksapec.ywidget.widget.YWidgetReceiver
 import com.tksapec.ywidget.widget.safeUpdateAll
+import com.tksapec.ywidget.work.RefreshStateCleanupWorker
 import com.tksapec.ywidget.work.RefreshWorker
 import kotlinx.coroutines.launch
 
@@ -140,6 +141,7 @@ class MainActivity : ComponentActivity() {
     private suspend fun enqueueImmediateRefresh() {
         try {
             preferences.updateRefreshQueued(true)
+            RefreshStateCleanupWorker.enqueue(this)
             safeUpdateAll(this)
             RefreshWorker.enqueueImmediate(this)
         } catch (_: Throwable) {

@@ -317,6 +317,7 @@ class RefreshWorker(
             val workManager = WorkManager.getInstance(context)
             workManager.cancelUniqueWork(UNIQUE_REFRESH_WORK)
             workManager.cancelUniqueWork(UNIQUE_PERIODIC_WORK)
+            RefreshStateCleanupWorker.cancel(context)
         }
 
         internal fun networkConstraints(): Constraints = Constraints.Builder()

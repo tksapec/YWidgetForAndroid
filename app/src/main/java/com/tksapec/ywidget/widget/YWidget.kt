@@ -54,6 +54,7 @@ import com.tksapec.ywidget.data.isNewsRefreshingActive
 import com.tksapec.ywidget.data.isRefreshQueuedActive
 import com.tksapec.ywidget.data.isWeatherRefreshingActive
 import com.tksapec.ywidget.data.weatherIconForCode
+import com.tksapec.ywidget.work.RefreshStateCleanupWorker
 import com.tksapec.ywidget.work.RefreshWorker
 import java.util.Calendar
 import java.text.SimpleDateFormat
@@ -391,6 +392,7 @@ class RefreshAction : ActionCallback {
         val preferences = WidgetPreferences(appContext)
         try {
             preferences.updateRefreshQueued(true)
+            RefreshStateCleanupWorker.enqueue(appContext)
             safeUpdateAll(appContext)
             RefreshWorker.enqueueImmediate(appContext)
         } catch (_: Throwable) {

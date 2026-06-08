@@ -154,6 +154,36 @@ class WidgetSettingsTest {
     }
 
     @Test
+    fun cleanupStaleRefreshQueueIsTrueOnlyForExpiredQueue() {
+        val settings = WidgetSettings(
+            refreshQueued = true,
+            refreshStartedAtMillis = 1_000L,
+        )
+
+        assertTrue(settings.shouldCleanupStaleRefreshQueue(now = 1_000L + REFRESH_ACTIVE_TIMEOUT_MILLIS))
+    }
+
+    @Test
+    fun cleanupStaleRefreshQueueIsFalseForActiveQueue() {
+        val settings = WidgetSettings(
+            refreshQueued = true,
+            refreshStartedAtMillis = 1_000L,
+        )
+
+        assertFalse(settings.shouldCleanupStaleRefreshQueue(now = 1_000L + REFRESH_ACTIVE_TIMEOUT_MILLIS - 1L))
+    }
+
+    @Test
+    fun cleanupStaleRefreshQueueIsFalseWhenQueueIsNotSet() {
+        val settings = WidgetSettings(
+            refreshQueued = false,
+            refreshStartedAtMillis = 1_000L,
+        )
+
+        assertFalse(settings.shouldCleanupStaleRefreshQueue(now = 1_000L + REFRESH_ACTIVE_TIMEOUT_MILLIS))
+    }
+
+    @Test
     fun weatherUnavailableErrorUsesUserFacingMessage() {
         val message = userFacingWeatherErrorMessage(IllegalStateException("jxhk:UNAVAILABLE"))
 
