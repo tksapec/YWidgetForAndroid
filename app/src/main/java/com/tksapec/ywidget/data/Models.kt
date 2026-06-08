@@ -100,8 +100,19 @@ fun WidgetSettings.isRefreshDue(now: Long): Boolean {
 }
 
 fun WidgetSettings.isNewsRefreshingActive(now: Long): Boolean {
-    return newsRefreshing &&
-        refreshStartedAtMillis > 0L &&
+    return newsRefreshing && isRefreshStateActive(now)
+}
+
+fun WidgetSettings.isWeatherRefreshingActive(now: Long): Boolean {
+    return weatherRefreshing && isRefreshStateActive(now)
+}
+
+fun WidgetSettings.isRefreshQueuedActive(now: Long): Boolean {
+    return refreshQueued && isRefreshStateActive(now)
+}
+
+private fun WidgetSettings.isRefreshStateActive(now: Long): Boolean {
+    return refreshStartedAtMillis > 0L &&
         now - refreshStartedAtMillis < REFRESH_ACTIVE_TIMEOUT_MILLIS
 }
 

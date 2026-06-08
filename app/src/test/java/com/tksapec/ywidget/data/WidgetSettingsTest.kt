@@ -104,6 +104,56 @@ class WidgetSettingsTest {
     }
 
     @Test
+    fun activeWeatherRefreshIsTrueWithinTimeout() {
+        val settings = WidgetSettings(
+            weatherRefreshing = true,
+            refreshStartedAtMillis = 1_000L,
+        )
+
+        assertTrue(settings.isWeatherRefreshingActive(now = 1_000L + REFRESH_ACTIVE_TIMEOUT_MILLIS - 1L))
+    }
+
+    @Test
+    fun activeWeatherRefreshIsFalseAfterTimeout() {
+        val settings = WidgetSettings(
+            weatherRefreshing = true,
+            refreshStartedAtMillis = 1_000L,
+        )
+
+        assertFalse(settings.isWeatherRefreshingActive(now = 1_000L + REFRESH_ACTIVE_TIMEOUT_MILLIS))
+    }
+
+    @Test
+    fun activeWeatherRefreshIsFalseWithoutStartTime() {
+        val settings = WidgetSettings(
+            weatherRefreshing = true,
+            refreshStartedAtMillis = 0L,
+        )
+
+        assertFalse(settings.isWeatherRefreshingActive(now = 60_000L))
+    }
+
+    @Test
+    fun activeRefreshQueueIsTrueWithinTimeout() {
+        val settings = WidgetSettings(
+            refreshQueued = true,
+            refreshStartedAtMillis = 1_000L,
+        )
+
+        assertTrue(settings.isRefreshQueuedActive(now = 1_000L + REFRESH_ACTIVE_TIMEOUT_MILLIS - 1L))
+    }
+
+    @Test
+    fun activeRefreshQueueIsFalseAfterTimeout() {
+        val settings = WidgetSettings(
+            refreshQueued = true,
+            refreshStartedAtMillis = 1_000L,
+        )
+
+        assertFalse(settings.isRefreshQueuedActive(now = 1_000L + REFRESH_ACTIVE_TIMEOUT_MILLIS))
+    }
+
+    @Test
     fun weatherUnavailableErrorUsesUserFacingMessage() {
         val message = userFacingWeatherErrorMessage(IllegalStateException("jxhk:UNAVAILABLE"))
 

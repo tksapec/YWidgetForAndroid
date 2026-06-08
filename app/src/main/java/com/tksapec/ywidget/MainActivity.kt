@@ -61,6 +61,11 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (hasPlacedWidgets()) {
+            lifecycleScope.launch {
+                RefreshWorker.schedulePeriodicFromSettings(this@MainActivity)
+            }
+        }
 
         setContent {
             val settings by preferences.settingsFlow.collectAsStateWithLifecycle(

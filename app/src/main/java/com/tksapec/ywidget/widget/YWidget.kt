@@ -51,6 +51,8 @@ import com.tksapec.ywidget.data.WidgetPreferences
 import com.tksapec.ywidget.data.WidgetSettings
 import com.tksapec.ywidget.data.WeatherLocationMode
 import com.tksapec.ywidget.data.isNewsRefreshingActive
+import com.tksapec.ywidget.data.isRefreshQueuedActive
+import com.tksapec.ywidget.data.isWeatherRefreshingActive
 import com.tksapec.ywidget.data.weatherIconForCode
 import com.tksapec.ywidget.work.RefreshWorker
 import java.util.Calendar
@@ -148,7 +150,7 @@ private fun WeatherText(settings: WidgetSettings) {
     if (settings.weatherLocationMode == WeatherLocationMode.Disabled) return
 
     val error = settings.lastWeatherError
-    if (settings.weatherRefreshing) {
+    if (settings.isWeatherRefreshingActive(System.currentTimeMillis())) {
         Text(
             text = "\u5929\u6C17\u66F4\u65B0\u4E2D...",
             modifier = GlanceModifier.padding(end = 8.dp),
@@ -228,7 +230,11 @@ private fun BottomActions(settings: WidgetSettings) {
                 .padding(horizontal = 6.dp),
             style = TextStyle(
                 color = ColorProvider(
-                    if (settings.lastNewsError == null && !settings.newsRefreshing && !settings.refreshQueued) {
+                    if (
+                        settings.lastNewsError == null &&
+                        !settings.isNewsRefreshingActive(System.currentTimeMillis()) &&
+                        !settings.isRefreshQueuedActive(System.currentTimeMillis())
+                    ) {
                         Color(0xFFB8B8B8)
                     } else {
                         Color(0xFFFFC268)
@@ -340,7 +346,7 @@ private fun openLauncherAppAction(packageName: String) = actionRunCallback<OpenL
 private fun statusText(settings: WidgetSettings): String {
     val now = System.currentTimeMillis()
     if (settings.isNewsRefreshingActive(now)) return "\u30CB\u30E5\u30FC\u30B9\u66F4\u65B0\u4E2D..."
-    if (settings.refreshQueued) return "\u66F4\u65B0\u4E88\u7D04\u4E2D..."
+    if (settings.isRefreshQueuedActive(now)) return "\u66F4\u65B0\u4E88\u7D04\u4E2D..."
     if (settings.lastNewsError != null && settings.newsUpdatedAtMillis <= 0L) return "\u66F4\u65B0\u5931\u6557"
     val updatedAt = formatUpdatedAt(settings.newsUpdatedAtMillis)
     return if (settings.lastNewsError == null) {
@@ -354,7 +360,7 @@ private fun emptyNewsText(settings: WidgetSettings): String {
     val now = System.currentTimeMillis()
     if (settings.isNewsRefreshingActive(now)) return "\u30CB\u30E5\u30FC\u30B9\u66F4\u65B0\u4E2D..."
     if (settings.newsRefreshing) return "\u524D\u56DE\u66F4\u65B0\u51E6\u7406\u304C\u4E2D\u65AD\u3055\u308C\u307E\u3057\u305F"
-    if (settings.refreshQueued) return "\u66F4\u65B0\u4E88\u7D04\u4E2D..."
+    if (settings.isRefreshQueuedActive(now)) return "\u66F4\u65B0\u4E88\u7D04\u4E2D..."
     if (settings.lastNewsError != null) return "\u30CB\u30E5\u30FC\u30B9\u53D6\u5F97\u5931\u6557"
     return "\u53D6\u5F97\u4E2D"
 }

@@ -157,7 +157,12 @@ class WidgetPreferences(private val context: Context) {
     }
 
     suspend fun updateRefreshQueued(queued: Boolean) {
-        context.widgetDataStore.edit { it[Keys.refreshQueued] = queued }
+        context.widgetDataStore.edit {
+            it[Keys.refreshQueued] = queued
+            if (queued) {
+                it[Keys.refreshStartedAtMillis] = System.currentTimeMillis()
+            }
+        }
     }
 
     suspend fun saveWeather(
@@ -184,7 +189,13 @@ class WidgetPreferences(private val context: Context) {
     }
 
     suspend fun updateWeatherRefreshing(refreshing: Boolean) {
-        context.widgetDataStore.edit { it[Keys.weatherRefreshing] = refreshing }
+        context.widgetDataStore.edit {
+            it[Keys.weatherRefreshing] = refreshing
+            if (refreshing) {
+                it[Keys.refreshQueued] = false
+                it[Keys.refreshStartedAtMillis] = System.currentTimeMillis()
+            }
+        }
     }
 
     suspend fun clearRefreshState() {

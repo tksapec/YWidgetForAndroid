@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.location.Address
 import android.location.Geocoder
+import android.os.Build
 import androidx.core.content.ContextCompat
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
@@ -28,6 +29,7 @@ import com.tksapec.ywidget.data.userFacingWeatherErrorMessage
 import com.tksapec.ywidget.network.RssClient
 import com.tksapec.ywidget.network.WeatherClient
 import com.tksapec.ywidget.widget.safeUpdateAll
+import com.google.android.gms.tasks.CancellationTokenSource
 import java.io.IOException
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
@@ -39,9 +41,11 @@ import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.coroutines.resume
 
 class RefreshWorker(
     appContext: Context,
@@ -137,19 +141,8 @@ class RefreshWorker(
             ) == PackageManager.PERMISSION_GRANTED
     }
 
-    private fun hasFineLocationPermission(): Boolean {
-        return ContextCompat.checkSelfPermission(
-            applicationContext,
-            Manifest.permission.ACCESS_FINE_LOCATION,
-        ) == PackageManager.PERMISSION_GRANTED
-    }
-
     private fun locationPriority(): Int {
-        return if (hasFineLocationPermission()) {
-            Priority.PRIORITY_HIGH_ACCURACY
-        } else {
-            Priority.PRIORITY_BALANCED_POWER_ACCURACY
-        }
+        return Priority.PRIORITY_BALANCED_POWER_ACCURACY
     }
 
     private suspend fun resolveWeatherTarget(
@@ -167,17 +160,26 @@ class RefreshWorker(
         if (!hasLocationPermission()) {
             error("\u4F4D\u7F6E\u60C5\u5831\u672A\u8A31\u53EF")
         }
-        val client = LocationServices.getFusedLocationProviderClient(applicationContext)
-        val location = client.lastLocation.await()
-            ?: withTimeoutOrNull(CURRENT_LOCATION_TIMEOUT_MILLIS) {
-                client.getCurrentLocation(locationPriority(), null).await()
+        val location = withTimeoutOrNull(CURRENT_LOCATION_TOTAL_TIMEOUT_MILLIS) {
+            val client = LocationServices.getFusedLocationProviderClient(applicationContext)
+            withTimeoutOrNull(LAST_LOCATION_TIMEOUT_MILLIS) {
+                client.lastLocation.await()
+            } ?: run {
+                val cancellationTokenSource = CancellationTokenSource()
+                try {
+                    withTimeoutOrNull(CURRENT_LOCATION_TIMEOUT_MILLIS) {
+                        client.getCurrentLocation(locationPriority(), cancellationTokenSource.token).await()
+                    }
+                } finally {
+                    cancellationTokenSource.cancel()
+                }
             }
-            ?: error(CURRENT_LOCATION_UNAVAILABLE_MESSAGE)
+        } ?: error(CURRENT_LOCATION_UNAVAILABLE_MESSAGE)
 
         return WeatherTarget(
             latitude = location.latitude,
             longitude = location.longitude,
-            label = reverseGeocode(location.latitude, location.longitude),
+            label = reverseGeocodeSafely(location.latitude, location.longitude),
         )
     }
 
@@ -217,12 +219,30 @@ class RefreshWorker(
         )
     }
 
-    private fun reverseGeocode(latitude: Double, longitude: Double): String? {
-        return Geocoder(applicationContext, Locale.JAPAN)
-            .getFromLocation(latitude, longitude, 1)
-            ?.firstOrNull()
-            ?.toLocationLabel()
-            ?.takeIf { it.isNotBlank() }
+    private suspend fun reverseGeocodeSafely(latitude: Double, longitude: Double): String? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return null
+        return withTimeoutOrNull(REVERSE_GEOCODE_TIMEOUT_MILLIS) {
+            suspendCancellableCoroutine { continuation ->
+                Geocoder(applicationContext, Locale.JAPAN).getFromLocation(
+                    latitude,
+                    longitude,
+                    1,
+                    object : Geocoder.GeocodeListener {
+                        override fun onGeocode(addresses: MutableList<Address>) {
+                            val label = addresses
+                                .firstOrNull()
+                                ?.toLocationLabel()
+                                ?.takeIf { it.isNotBlank() }
+                            if (continuation.isActive) continuation.resume(label)
+                        }
+
+                        override fun onError(errorMessage: String?) {
+                            if (continuation.isActive) continuation.resume(null)
+                        }
+                    },
+                )
+            }
+        }
     }
 
     private fun Address.toLocationLabel(): String {
@@ -242,7 +262,11 @@ class RefreshWorker(
         private const val UNIQUE_REFRESH_WORK = "yahoo_news_widget_refresh"
         private const val UNIQUE_PERIODIC_WORK = "yahoo_news_widget_periodic_refresh"
         private const val BACKOFF_MINUTES = 10L
+        private const val PERIODIC_TRIGGER_MINUTES = 15L
+        private const val LAST_LOCATION_TIMEOUT_MILLIS = 2_000L
         private const val CURRENT_LOCATION_TIMEOUT_MILLIS = 10_000L
+        private const val CURRENT_LOCATION_TOTAL_TIMEOUT_MILLIS = 12_000L
+        private const val REVERSE_GEOCODE_TIMEOUT_MILLIS = 2_000L
 
         fun enqueueImmediate(context: Context) {
             enqueueImmediate(context, ExistingWorkPolicy.KEEP)
@@ -274,9 +298,8 @@ class RefreshWorker(
         }
 
         fun schedulePeriodic(context: Context, intervalMinutes: Long) {
-            val safeIntervalMinutes = intervalMinutes.coerceAtLeast(15L)
             val request = PeriodicWorkRequestBuilder<RefreshTriggerWorker>(
-                safeIntervalMinutes,
+                PERIODIC_TRIGGER_MINUTES,
                 TimeUnit.MINUTES,
             )
                 .setConstraints(networkConstraints())
