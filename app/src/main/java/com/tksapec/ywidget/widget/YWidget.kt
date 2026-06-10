@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.util.Log
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
@@ -47,8 +48,10 @@ import androidx.glance.text.TextStyle
 import androidx.glance.unit.ColorProvider
 import com.tksapec.ywidget.data.LauncherAppShortcut
 import com.tksapec.ywidget.data.NewsItem
+import com.tksapec.ywidget.data.RefreshResult
 import com.tksapec.ywidget.data.WidgetPreferences
 import com.tksapec.ywidget.data.WidgetSettings
+import com.tksapec.ywidget.data.hasStaleRefreshState
 import com.tksapec.ywidget.data.WeatherLocationMode
 import com.tksapec.ywidget.data.isNewsRefreshingActive
 import com.tksapec.ywidget.data.isRefreshQueuedActive
@@ -76,15 +79,30 @@ class YWidget : GlanceAppWidget() {
     }
 }
 
-suspend fun safeUpdateAll(context: Context) {
-    runCatching {
+suspend fun safeUpdateAll(context: Context): Boolean {
+    val preferences = WidgetPreferences(context)
+    val updateError = runCatching {
         YWidget().updateAll(context)
+    }.exceptionOrNull()
+    if (updateError != null) {
+        val error = updateError
+        Log.e("YWidget", "Failed to update Glance widgets", error)
+        runCatching {
+            preferences.saveWidgetUpdateError(error.message?.take(160) ?: error.javaClass.simpleName)
+        }.onFailure { persistenceError ->
+            Log.w("YWidget", "Failed to persist widget update error", persistenceError)
+        }
+        return false
     }
+    runCatching { preferences.saveWidgetUpdateSuccess() }
+        .onFailure { Log.w("YWidget", "Widget updated but diagnostics could not be saved", it) }
+    return true
 }
 
 @Composable
 private fun YWidgetContent(settings: WidgetSettings) {
     val style = settings.displayStyle
+    val now = System.currentTimeMillis()
     Column(
         modifier = GlanceModifier
             .fillMaxSize()
@@ -92,25 +110,26 @@ private fun YWidgetContent(settings: WidgetSettings) {
             .cornerRadius(16.dp)
             .padding(horizontal = 12.dp, vertical = (8 + style.verticalPaddingDp).dp),
     ) {
-        Header(settings)
+        Header(settings, now)
         Spacer(GlanceModifier.height(4.dp))
         Divider()
         Spacer(GlanceModifier.height(2.dp))
         NewsList(
             settings = settings,
+            now = now,
         )
-        BottomActions(settings)
+        BottomActions(settings, now)
     }
 }
 
 @Composable
-private fun Header(settings: WidgetSettings) {
+private fun Header(settings: WidgetSettings, now: Long) {
     Row(
         modifier = GlanceModifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         HeaderTitle(settings)
-        WeatherText(settings)
+        WeatherText(settings, now)
 
         Text(
             text = "\u21BB",
@@ -145,13 +164,13 @@ private fun RowScope.HeaderTitle(settings: WidgetSettings) {
 }
 
 @Composable
-private fun WeatherText(settings: WidgetSettings) {
+private fun WeatherText(settings: WidgetSettings, now: Long) {
     val code = settings.weatherCode
     val temperature = settings.temperatureCelsius
     if (settings.weatherLocationMode == WeatherLocationMode.Disabled) return
 
     val error = settings.lastWeatherError
-    if (settings.isWeatherRefreshingActive(System.currentTimeMillis())) {
+    if (settings.isWeatherRefreshingActive(now)) {
         Text(
             text = "\u5929\u6C17\u66F4\u65B0\u4E2D...",
             modifier = GlanceModifier.padding(end = 8.dp),
@@ -206,7 +225,7 @@ private fun WeatherText(settings: WidgetSettings) {
 }
 
 @Composable
-private fun BottomActions(settings: WidgetSettings) {
+private fun BottomActions(settings: WidgetSettings, now: Long) {
     val packageManager = LocalContext.current.packageManager
     Row(
         modifier = GlanceModifier.fillMaxWidth(),
@@ -225,7 +244,7 @@ private fun BottomActions(settings: WidgetSettings) {
             }
             .forEach { app -> LauncherAppButton(app) }
         Text(
-            text = statusText(settings),
+            text = statusText(settings, now),
             modifier = GlanceModifier
                 .defaultWeight()
                 .padding(horizontal = 6.dp),
@@ -233,8 +252,9 @@ private fun BottomActions(settings: WidgetSettings) {
                 color = ColorProvider(
                     if (
                         settings.lastNewsError == null &&
-                        !settings.isNewsRefreshingActive(System.currentTimeMillis()) &&
-                        !settings.isRefreshQueuedActive(System.currentTimeMillis())
+                        !settings.isNewsRefreshingActive(now) &&
+                        !settings.isRefreshQueuedActive(now) &&
+                        !settings.hasStaleRefreshState(now)
                     ) {
                         Color(0xFFB8B8B8)
                     } else {
@@ -282,7 +302,7 @@ private fun TodayButton() {
 }
 
 @Composable
-private fun ColumnScope.NewsList(settings: WidgetSettings) {
+private fun ColumnScope.NewsList(settings: WidgetSettings, now: Long) {
     val modifier = GlanceModifier.defaultWeight().fillMaxWidth()
     val news = settings.news.take(settings.displayCount)
 
@@ -292,7 +312,7 @@ private fun ColumnScope.NewsList(settings: WidgetSettings) {
             contentAlignment = Alignment.Center,
         ) {
             Text(
-                text = emptyNewsText(settings),
+                text = emptyNewsText(settings, now),
                 style = TextStyle(
                     color = ColorProvider(Color(0xFFE4E4E4)),
                     fontSize = 13.sp,
@@ -344,11 +364,13 @@ private fun openLauncherAppAction(packageName: String) = actionRunCallback<OpenL
     actionParametersOf(PackageNameParameterKey to packageName),
 )
 
-private fun statusText(settings: WidgetSettings): String {
-    val now = System.currentTimeMillis()
+internal fun statusText(settings: WidgetSettings, now: Long): String {
     if (settings.isNewsRefreshingActive(now)) return "\u30CB\u30E5\u30FC\u30B9\u66F4\u65B0\u4E2D..."
     if (settings.isRefreshQueuedActive(now)) return "\u66F4\u65B0\u4E88\u7D04\u4E2D..."
-    if (settings.lastNewsError != null && settings.newsUpdatedAtMillis <= 0L) return "\u66F4\u65B0\u5931\u6557"
+    if (settings.hasStaleRefreshState(now)) return "\u524D\u56DE\u66F4\u65B0\u304C\u4E2D\u65AD\u3055\u308C\u307E\u3057\u305F"
+    if (settings.lastRefreshResult == RefreshResult.Stale) return "\u524D\u56DE\u66F4\u65B0\u304C\u4E2D\u65AD\u3055\u308C\u307E\u3057\u305F"
+    if (settings.lastNewsError != null && settings.newsUpdatedAtMillis <= 0L) return "\u30CB\u30E5\u30FC\u30B9\u53D6\u5F97\u5931\u6557"
+    if (settings.newsUpdatedAtMillis <= 0L) return "\u672A\u53D6\u5F97 / \u21BB\u3067\u66F4\u65B0"
     val updatedAt = formatUpdatedAt(settings.newsUpdatedAtMillis)
     return if (settings.lastNewsError == null) {
         "\u66F4\u65B0: $updatedAt"
@@ -357,13 +379,13 @@ private fun statusText(settings: WidgetSettings): String {
     }
 }
 
-private fun emptyNewsText(settings: WidgetSettings): String {
-    val now = System.currentTimeMillis()
+internal fun emptyNewsText(settings: WidgetSettings, now: Long): String {
     if (settings.isNewsRefreshingActive(now)) return "\u30CB\u30E5\u30FC\u30B9\u66F4\u65B0\u4E2D..."
-    if (settings.newsRefreshing) return "\u524D\u56DE\u66F4\u65B0\u51E6\u7406\u304C\u4E2D\u65AD\u3055\u308C\u307E\u3057\u305F"
     if (settings.isRefreshQueuedActive(now)) return "\u66F4\u65B0\u4E88\u7D04\u4E2D..."
+    if (settings.hasStaleRefreshState(now)) return "\u524D\u56DE\u66F4\u65B0\u304C\u4E2D\u65AD\u3055\u308C\u307E\u3057\u305F"
+    if (settings.lastRefreshResult == RefreshResult.Stale) return "\u524D\u56DE\u66F4\u65B0\u304C\u4E2D\u65AD\u3055\u308C\u307E\u3057\u305F"
     if (settings.lastNewsError != null) return "\u30CB\u30E5\u30FC\u30B9\u53D6\u5F97\u5931\u6557"
-    return "\u53D6\u5F97\u4E2D"
+    return "\u672A\u53D6\u5F97 / \u21BB\u3067\u66F4\u65B0"
 }
 
 private fun formatUpdatedAt(updatedAtMillis: Long): String {
@@ -394,9 +416,9 @@ class RefreshAction : ActionCallback {
             preferences.updateRefreshQueued(true)
             RefreshStateCleanupWorker.enqueue(appContext)
             safeUpdateAll(appContext)
-            RefreshWorker.enqueueImmediate(appContext)
+            RefreshWorker.enqueueImmediateByUser(appContext)
         } catch (_: Throwable) {
-            preferences.clearRefreshState()
+            preferences.finishRefresh(RefreshResult.Failed, "更新予約失敗")
             safeUpdateAll(appContext)
         }
     }
@@ -505,7 +527,7 @@ class YWidgetReceiver : GlanceAppWidgetReceiver() {
                 // Periodic refresh is owned by WorkManager; AppWidgetProvider only registers and kicks due work.
                 RefreshWorker.schedulePeriodicFromSettings(context.applicationContext)
                 if (refreshImmediately) {
-                    RefreshWorker.enqueueImmediate(context.applicationContext)
+                    RefreshWorker.enqueueImmediateByUser(context.applicationContext)
                 } else {
                     RefreshWorker.enqueueImmediateIfDueFromSettings(context.applicationContext)
                 }

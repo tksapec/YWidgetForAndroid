@@ -31,8 +31,30 @@ data class WidgetSettings(
     val weatherRefreshing: Boolean = false,
     val lastNewsError: String? = null,
     val lastWeatherError: String? = null,
+    val lastRefreshStartedAtMillis: Long = 0L,
+    val lastRefreshFinishedAtMillis: Long = 0L,
+    val lastRefreshResult: RefreshResult? = null,
+    val lastRefreshMessage: String? = null,
+    val lastWidgetUpdatedAtMillis: Long = 0L,
+    val lastWidgetUpdateError: String? = null,
+    val lastCurrentLatitude: Double? = null,
+    val lastCurrentLongitude: Double? = null,
+    val lastCurrentLocationLabel: String? = null,
     val launcherAppSlots: List<LauncherAppSlot> = emptyLauncherAppSlots(),
 )
+
+enum class RefreshResult(val label: String) {
+    Success("成功"),
+    PartialSuccess("一部成功"),
+    Failed("失敗"),
+    Cancelled("中断"),
+    Stale("中断の可能性"),
+    ;
+
+    companion object {
+        fun fromName(name: String?): RefreshResult? = entries.firstOrNull { it.name == name }
+    }
+}
 
 @Serializable
 data class LauncherAppShortcut(
@@ -112,7 +134,15 @@ fun WidgetSettings.isRefreshQueuedActive(now: Long): Boolean {
 }
 
 fun WidgetSettings.shouldCleanupStaleRefreshQueue(now: Long): Boolean {
-    return refreshQueued && !isRefreshStateActive(now)
+    return hasRefreshState() && !isRefreshStateActive(now)
+}
+
+fun WidgetSettings.hasStaleRefreshState(now: Long): Boolean {
+    return hasRefreshState() && !isRefreshStateActive(now)
+}
+
+private fun WidgetSettings.hasRefreshState(): Boolean {
+    return refreshQueued || newsRefreshing || weatherRefreshing
 }
 
 private fun WidgetSettings.isRefreshStateActive(now: Long): Boolean {

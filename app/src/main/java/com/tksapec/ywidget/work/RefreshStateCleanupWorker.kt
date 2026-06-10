@@ -20,7 +20,7 @@ class RefreshStateCleanupWorker(
         val preferences = WidgetPreferences(applicationContext)
         val settings = preferences.currentSettings()
         if (settings.shouldCleanupStaleRefreshQueue(System.currentTimeMillis())) {
-            preferences.clearRefreshState()
+            preferences.markRefreshStale()
             safeUpdateAll(applicationContext)
         }
         return Result.success()

@@ -14,7 +14,7 @@ class RefreshTriggerWorker(
         val settings = WidgetPreferences(applicationContext).currentSettings()
         if (settings.isRefreshDue(System.currentTimeMillis())) {
             return runCatching {
-                RefreshWorker.enqueueImmediate(applicationContext)
+                RefreshWorker.enqueueImmediateIfDueFromSettings(applicationContext)
             }.fold(
                 onSuccess = { Result.success() },
                 onFailure = { Result.retry() },

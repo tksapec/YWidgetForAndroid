@@ -48,6 +48,7 @@ import com.tksapec.ywidget.data.DisplayStyle
 import com.tksapec.ywidget.data.LauncherAppSlot
 import com.tksapec.ywidget.data.LauncherAppShortcut
 import com.tksapec.ywidget.data.NewsCategory
+import com.tksapec.ywidget.data.RefreshResult
 import com.tksapec.ywidget.data.WeatherLocationMode
 import com.tksapec.ywidget.data.WidgetPreferences
 import com.tksapec.ywidget.data.WidgetSettings
@@ -55,6 +56,9 @@ import com.tksapec.ywidget.widget.YWidgetReceiver
 import com.tksapec.ywidget.widget.safeUpdateAll
 import com.tksapec.ywidget.work.RefreshStateCleanupWorker
 import com.tksapec.ywidget.work.RefreshWorker
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -132,6 +136,9 @@ class MainActivity : ComponentActivity() {
                                 safeUpdateAll(this@MainActivity)
                             }
                         },
+                        onRefreshNow = {
+                            lifecycleScope.launch { enqueueImmediateRefresh() }
+                        },
                     )
                 }
             }
@@ -143,9 +150,9 @@ class MainActivity : ComponentActivity() {
             preferences.updateRefreshQueued(true)
             RefreshStateCleanupWorker.enqueue(this)
             safeUpdateAll(this)
-            RefreshWorker.enqueueImmediate(this)
+            RefreshWorker.enqueueImmediateByUser(this)
         } catch (_: Throwable) {
-            preferences.clearRefreshState()
+            preferences.finishRefresh(RefreshResult.Failed, "更新予約失敗")
             safeUpdateAll(this)
         }
     }
@@ -162,6 +169,7 @@ private fun SettingsScreen(
     onFixedLocationSaved: (String) -> Unit,
     onLauncherAppSlotsChanged: (List<LauncherAppSlot>) -> Unit,
     onRefreshStateReset: () -> Unit,
+    onRefreshNow: () -> Unit,
 ) {
     val context = LocalContext.current
     val launcherAppOptions = remember(context) { loadLauncherAppOptions(context) }
@@ -171,6 +179,7 @@ private fun SettingsScreen(
     var locationGranted by remember {
         mutableStateOf(context.hasLocationPermission())
     }
+    var diagnosticsExpanded by remember { mutableStateOf(false) }
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
     ) { grants ->
@@ -236,6 +245,12 @@ private fun SettingsScreen(
                 locationGranted = locationGranted,
                 onSelected = onWeatherLocationModeSelected,
             )
+            if (settings.weatherLocationMode == WeatherLocationMode.Current) {
+                Text(
+                    text = "現在地は端末状態により取得できない場合があります。安定運用には固定地域をおすすめします。",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
         }
 
         SettingRow(label = "\u4F4D\u7F6E\u60C5\u5831\u6A29\u9650") {
@@ -288,12 +303,51 @@ private fun SettingsScreen(
             style = MaterialTheme.typography.bodySmall,
         )
 
-        SettingRow(label = "\u66F4\u65B0\u72B6\u614B") {
-            Button(onClick = onRefreshStateReset) {
-                Text("\u66F4\u65B0\u72B6\u614B\u3092\u30EA\u30BB\u30C3\u30C8")
+        SettingBlock(label = "更新操作") {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = onRefreshNow) {
+                    Text("今すぐ再取得")
+                }
+                OutlinedButton(onClick = onRefreshStateReset) {
+                    Text("状態をリセット")
+                }
+            }
+        }
+
+        SettingBlock(label = "更新診断") {
+            OutlinedButton(onClick = { diagnosticsExpanded = !diagnosticsExpanded }) {
+                Text(if (diagnosticsExpanded) "診断を閉じる" else "診断を表示")
+            }
+            if (diagnosticsExpanded) {
+                RefreshDiagnostics(settings)
             }
         }
     }
+}
+
+@Composable
+private fun RefreshDiagnostics(settings: WidgetSettings) {
+    val rows = listOf(
+        "最終ニュース取得" to formatDiagnosticTime(settings.newsUpdatedAtMillis),
+        "最終天気取得" to formatDiagnosticTime(settings.weatherUpdatedAtMillis),
+        "最終更新開始" to formatDiagnosticTime(settings.lastRefreshStartedAtMillis),
+        "最終更新終了" to formatDiagnosticTime(settings.lastRefreshFinishedAtMillis),
+        "現在状態" to "queued=${settings.refreshQueued}, news=${settings.newsRefreshing}, weather=${settings.weatherRefreshing}",
+        "最終結果" to (settings.lastRefreshResult?.label ?: "未実行"),
+        "結果メッセージ" to settings.lastRefreshMessage.orEmpty().ifBlank { "なし" },
+        "ニュースエラー" to settings.lastNewsError.orEmpty().ifBlank { "なし" },
+        "天気エラー" to settings.lastWeatherError.orEmpty().ifBlank { "なし" },
+        "最終ウィジェット反映" to formatDiagnosticTime(settings.lastWidgetUpdatedAtMillis),
+        "ウィジェット反映エラー" to settings.lastWidgetUpdateError.orEmpty().ifBlank { "なし" },
+    )
+    rows.forEach { (label, value) ->
+        Text("$label: $value", style = MaterialTheme.typography.bodySmall)
+    }
+}
+
+private fun formatDiagnosticTime(value: Long): String {
+    if (value <= 0L) return "未記録"
+    return SimpleDateFormat("yyyy/MM/dd HH:mm:ss", Locale.JAPAN).format(Date(value))
 }
 
 @Composable

@@ -1,11 +1,13 @@
 package com.tksapec.ywidget.work
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.pm.PackageManager
 import android.location.Address
 import android.location.Geocoder
 import android.os.Build
+import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
@@ -19,11 +21,14 @@ import androidx.work.BackoffPolicy
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.tksapec.ywidget.data.PARTIAL_NEWS_ERROR_MESSAGE
+import com.tksapec.ywidget.data.NewsItem
+import com.tksapec.ywidget.data.RefreshResult
 import com.tksapec.ywidget.data.WeatherLocationMode
 import com.tksapec.ywidget.data.WidgetPreferences
 import com.tksapec.ywidget.data.WidgetSettings
 import com.tksapec.ywidget.data.CURRENT_LOCATION_UNAVAILABLE_MESSAGE
 import com.tksapec.ywidget.data.isRefreshDue
+import com.tksapec.ywidget.data.hasStaleRefreshState
 import com.tksapec.ywidget.data.summarizeNewsFetchResults
 import com.tksapec.ywidget.data.userFacingWeatherErrorMessage
 import com.tksapec.ywidget.network.RssClient
@@ -39,6 +44,8 @@ import java.net.UnknownHostException
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -55,18 +62,31 @@ class RefreshWorker(
         val preferences = WidgetPreferences(applicationContext)
         var retryNeeded = false
         var result = Result.success()
+        var finalRefreshResult = RefreshResult.Success
+        var finalRefreshMessage = "更新完了"
 
         try {
+            preferences.markRefreshRunning()
+            safeUpdateAll(applicationContext)
             withContext(Dispatchers.IO) {
                 val settings = preferences.currentSettings()
-                val now = System.currentTimeMillis()
                 val rssClient = RssClient()
-                preferences.updateNewsRefreshing(true)
-                safeUpdateAll(applicationContext)
-
-                val categoryResults = settings.selectedCategories.map { category ->
-                    runCatching { rssClient.fetch(category) }
-                }
+                val categoryResults: List<kotlin.Result<List<NewsItem>>> =
+                    withTimeoutOrNull(NEWS_TOTAL_TIMEOUT_MILLIS) {
+                        coroutineScope {
+                            settings.selectedCategories.map { category ->
+                                async(Dispatchers.IO) {
+                                    runCatching {
+                                        withTimeoutOrNull(NEWS_CATEGORY_TIMEOUT_MILLIS) {
+                                            rssClient.fetch(category)
+                                        } ?: throw SocketTimeoutException("RSS category timeout: ${category.name}")
+                                    }
+                                }
+                            }.map { it.await() }
+                        }
+                    } ?: settings.selectedCategories.map {
+                        kotlin.Result.failure(SocketTimeoutException("RSS total timeout"))
+                    }
                 val firstCancellation = categoryResults
                     .mapNotNull { it.exceptionOrNull() as? CancellationException }
                     .firstOrNull()
@@ -77,14 +97,22 @@ class RefreshWorker(
                 if (newsSummary.hasNews) {
                     preferences.saveNews(
                         news = newsSummary.news,
-                        updatedAtMillis = now,
+                        updatedAtMillis = System.currentTimeMillis(),
                         warningMessage = PARTIAL_NEWS_ERROR_MESSAGE.takeIf {
                             newsSummary.failedCategoryCount > 0
                         },
                     )
+                    safeUpdateAll(applicationContext)
+                    if (newsSummary.failedCategoryCount > 0) {
+                        finalRefreshResult = RefreshResult.PartialSuccess
+                        finalRefreshMessage = "一部カテゴリの取得に失敗"
+                    }
                     if (newsSummary.failures.any { it.isTransientFailure() }) retryNeeded = true
                 } else {
                     preferences.saveNewsError("\u30CB\u30E5\u30FC\u30B9\u53D6\u5F97\u5931\u6557")
+                    safeUpdateAll(applicationContext)
+                    finalRefreshResult = RefreshResult.Failed
+                    finalRefreshMessage = "ニュース取得失敗"
                     retryNeeded = newsSummary.failures.isEmpty() ||
                         newsSummary.failures.any { it.isTransientFailure() }
                 }
@@ -102,27 +130,43 @@ class RefreshWorker(
                                 code = weather.code,
                                 temperatureCelsius = weather.temperatureCelsius,
                                 locationLabel = target.label,
-                                updatedAtMillis = now,
+                                updatedAtMillis = System.currentTimeMillis(),
                             )
+                            safeUpdateAll(applicationContext)
                         }.onFailure { error ->
                             if (error is CancellationException) throw error
                             preferences.saveWeatherError(userFacingWeatherErrorMessage(error))
+                            safeUpdateAll(applicationContext)
+                            if (finalRefreshResult == RefreshResult.Success) {
+                                finalRefreshResult = RefreshResult.PartialSuccess
+                                finalRefreshMessage = "天気取得失敗"
+                            }
                             if (error.isTransientFailure()) retryNeeded = true
                         }
                     }.onFailure { error ->
                         if (error is CancellationException) throw error
                         preferences.saveWeatherError(userFacingWeatherErrorMessage(error))
+                        safeUpdateAll(applicationContext)
+                        if (finalRefreshResult == RefreshResult.Success) {
+                            finalRefreshResult = RefreshResult.PartialSuccess
+                            finalRefreshMessage = "天気取得失敗"
+                        }
                     }
                 }
             }
             result = if (retryNeeded) Result.retry() else Result.success()
         } catch (error: CancellationException) {
+            finalRefreshResult = RefreshResult.Cancelled
+            finalRefreshMessage = "更新が中断されました"
             throw error
         } catch (error: Throwable) {
+            Log.e("RefreshWorker", "Refresh failed", error)
+            finalRefreshResult = RefreshResult.Failed
+            finalRefreshMessage = "更新失敗"
             result = if (error.isTransientFailure()) Result.retry() else Result.failure()
         } finally {
             withContext(NonCancellable) {
-                preferences.clearRefreshState()
+                preferences.finishRefresh(finalRefreshResult, finalRefreshMessage)
                 safeUpdateAll(applicationContext)
             }
         }
@@ -150,36 +194,64 @@ class RefreshWorker(
         preferences: WidgetPreferences,
     ): WeatherTarget {
         return when (settings.weatherLocationMode) {
-            WeatherLocationMode.Current -> resolveCurrentLocation()
+            WeatherLocationMode.Current -> resolveCurrentLocation(settings, preferences)
             WeatherLocationMode.Fixed -> resolveFixedLocation(settings, preferences)
             WeatherLocationMode.Disabled -> error("\u5929\u6C17\u8868\u793A\u306A\u3057")
         }
     }
 
-    private suspend fun resolveCurrentLocation(): WeatherTarget {
+    @SuppressLint("MissingPermission")
+    private suspend fun resolveCurrentLocation(
+        settings: WidgetSettings,
+        preferences: WidgetPreferences,
+    ): WeatherTarget {
         if (!hasLocationPermission()) {
             error("\u4F4D\u7F6E\u60C5\u5831\u672A\u8A31\u53EF")
         }
-        val location = withTimeoutOrNull(CURRENT_LOCATION_TOTAL_TIMEOUT_MILLIS) {
-            val client = LocationServices.getFusedLocationProviderClient(applicationContext)
-            withTimeoutOrNull(LAST_LOCATION_TIMEOUT_MILLIS) {
-                client.lastLocation.await()
-            } ?: run {
-                val cancellationTokenSource = CancellationTokenSource()
-                try {
-                    withTimeoutOrNull(CURRENT_LOCATION_TIMEOUT_MILLIS) {
-                        client.getCurrentLocation(locationPriority(), cancellationTokenSource.token).await()
+        val location = try {
+            withTimeoutOrNull(CURRENT_LOCATION_TOTAL_TIMEOUT_MILLIS) {
+                val client = LocationServices.getFusedLocationProviderClient(applicationContext)
+                withTimeoutOrNull(LAST_LOCATION_TIMEOUT_MILLIS) {
+                    client.lastLocation.await()
+                } ?: run {
+                    val cancellationTokenSource = CancellationTokenSource()
+                    try {
+                        withTimeoutOrNull(CURRENT_LOCATION_TIMEOUT_MILLIS) {
+                            client.getCurrentLocation(locationPriority(), cancellationTokenSource.token).await()
+                        }
+                    } finally {
+                        cancellationTokenSource.cancel()
                     }
-                } finally {
-                    cancellationTokenSource.cancel()
                 }
             }
-        } ?: error(CURRENT_LOCATION_UNAVAILABLE_MESSAGE)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            Log.w("RefreshWorker", "Current location lookup failed", error)
+            null
+        }
+
+        if (location == null) {
+            val cachedLatitude = settings.lastCurrentLatitude
+            val cachedLongitude = settings.lastCurrentLongitude
+            if (cachedLatitude != null && cachedLongitude != null) {
+                Log.w("RefreshWorker", "Current location unavailable; using cached location")
+                return WeatherTarget(
+                    latitude = cachedLatitude,
+                    longitude = cachedLongitude,
+                    label = settings.lastCurrentLocationLabel,
+                )
+            }
+            error(CURRENT_LOCATION_UNAVAILABLE_MESSAGE)
+        }
+
+        val label = reverseGeocodeSafely(location.latitude, location.longitude)
+        preferences.saveCurrentLocation(location.latitude, location.longitude, label)
 
         return WeatherTarget(
             latitude = location.latitude,
             longitude = location.longitude,
-            label = reverseGeocodeSafely(location.latitude, location.longitude),
+            label = label,
         )
     }
 
@@ -201,10 +273,10 @@ class RefreshWorker(
             )
         }
 
-        val address = Geocoder(applicationContext, Locale.JAPAN)
-            .getFromLocationName(query, 1)
-            ?.firstOrNull()
-            ?: error("\u56FA\u5B9A\u5730\u57DF\u89E3\u6C7A\u5931\u6557")
+        if (!Geocoder.isPresent()) error("\u56FA\u5B9A\u5730\u57DF\u89E3\u6C7A\u5931\u6557")
+        val address = withTimeoutOrNull(GEOCODE_TIMEOUT_MILLIS) {
+            geocodeLocationName(query)
+        } ?: error("\u56FA\u5B9A\u5730\u57DF\u89E3\u6C7A\u5931\u6557")
         val label = address.toLocationLabel().ifBlank { query }
         preferences.saveFixedLocation(
             query = query,
@@ -217,6 +289,36 @@ class RefreshWorker(
             longitude = address.longitude,
             label = label,
         )
+    }
+
+    private suspend fun geocodeLocationName(query: String): Address? {
+        val geocoder = Geocoder(applicationContext, Locale.JAPAN)
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            suspendCancellableCoroutine { continuation ->
+                geocoder.getFromLocationName(
+                    query,
+                    1,
+                    object : Geocoder.GeocodeListener {
+                        override fun onGeocode(addresses: MutableList<Address>) {
+                            if (continuation.isActive) continuation.resume(addresses.firstOrNull())
+                        }
+
+                        override fun onError(errorMessage: String?) {
+                            Log.w("RefreshWorker", "Geocoder failed: ${errorMessage.orEmpty()}")
+                            if (continuation.isActive) continuation.resume(null)
+                        }
+                    },
+                )
+            }
+        } else {
+            try {
+                @Suppress("DEPRECATION")
+                geocoder.getFromLocationName(query, 1)?.firstOrNull()
+            } catch (error: IOException) {
+                Log.w("RefreshWorker", "Geocoder I/O failure", error)
+                null
+            }
+        }
     }
 
     private suspend fun reverseGeocodeSafely(latitude: Double, longitude: Double): String? {
@@ -267,12 +369,17 @@ class RefreshWorker(
         private const val CURRENT_LOCATION_TIMEOUT_MILLIS = 10_000L
         private const val CURRENT_LOCATION_TOTAL_TIMEOUT_MILLIS = 12_000L
         private const val REVERSE_GEOCODE_TIMEOUT_MILLIS = 2_000L
+        private const val GEOCODE_TIMEOUT_MILLIS = 8_000L
+        private const val NEWS_CATEGORY_TIMEOUT_MILLIS = 12_000L
+        private const val NEWS_TOTAL_TIMEOUT_MILLIS = 20_000L
 
-        fun enqueueImmediate(context: Context) {
-            enqueueImmediate(context, ExistingWorkPolicy.KEEP)
+        fun enqueueImmediateByUser(context: Context) {
+            enqueueImmediate(context, userEnqueuePolicy())
         }
 
-        fun enqueueImmediate(context: Context, existingWorkPolicy: ExistingWorkPolicy) {
+        internal fun userEnqueuePolicy(): ExistingWorkPolicy = ExistingWorkPolicy.REPLACE
+
+        private fun enqueueImmediate(context: Context, existingWorkPolicy: ExistingWorkPolicy) {
             val request = OneTimeWorkRequestBuilder<RefreshWorker>()
                 .setConstraints(networkConstraints())
                 .setBackoffCriteria(BackoffPolicy.LINEAR, BACKOFF_MINUTES, TimeUnit.MINUTES)
@@ -287,8 +394,17 @@ class RefreshWorker(
 
         suspend fun enqueueImmediateIfDueFromSettings(context: Context) {
             val settings = WidgetPreferences(context).currentSettings()
-            if (settings.isRefreshDue(System.currentTimeMillis())) {
-                enqueueImmediate(context)
+            val now = System.currentTimeMillis()
+            if (settings.isRefreshDue(now)) {
+                enqueueImmediate(context, periodicEnqueuePolicy(settings, now))
+            }
+        }
+
+        internal fun periodicEnqueuePolicy(settings: WidgetSettings, now: Long): ExistingWorkPolicy {
+            return if (settings.hasStaleRefreshState(now)) {
+                ExistingWorkPolicy.REPLACE
+            } else {
+                ExistingWorkPolicy.KEEP
             }
         }
 

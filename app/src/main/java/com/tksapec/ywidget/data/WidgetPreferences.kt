@@ -62,6 +62,15 @@ class WidgetPreferences(private val context: Context) {
             weatherRefreshing = preferences[Keys.weatherRefreshing] ?: false,
             lastNewsError = preferences[Keys.lastNewsError],
             lastWeatherError = preferences[Keys.lastWeatherError],
+            lastRefreshStartedAtMillis = preferences[Keys.lastRefreshStartedAtMillis] ?: 0L,
+            lastRefreshFinishedAtMillis = preferences[Keys.lastRefreshFinishedAtMillis] ?: 0L,
+            lastRefreshResult = RefreshResult.fromName(preferences[Keys.lastRefreshResult]),
+            lastRefreshMessage = preferences[Keys.lastRefreshMessage],
+            lastWidgetUpdatedAtMillis = preferences[Keys.lastWidgetUpdatedAtMillis] ?: 0L,
+            lastWidgetUpdateError = preferences[Keys.lastWidgetUpdateError],
+            lastCurrentLatitude = preferences[Keys.lastCurrentLatitude],
+            lastCurrentLongitude = preferences[Keys.lastCurrentLongitude],
+            lastCurrentLocationLabel = preferences[Keys.lastCurrentLocationLabel],
             launcherAppSlots = launcherAppSlots,
         )
     }
@@ -160,7 +169,63 @@ class WidgetPreferences(private val context: Context) {
         context.widgetDataStore.edit {
             it[Keys.refreshQueued] = queued
             if (queued) {
-                it[Keys.refreshStartedAtMillis] = System.currentTimeMillis()
+                val now = System.currentTimeMillis()
+                it[Keys.refreshStartedAtMillis] = now
+                it[Keys.lastRefreshStartedAtMillis] = now
+                it.remove(Keys.lastRefreshFinishedAtMillis)
+                it.remove(Keys.lastRefreshResult)
+                it[Keys.lastRefreshMessage] = "更新予約中"
+            }
+        }
+    }
+
+    suspend fun markRefreshRunning(startedAtMillis: Long = System.currentTimeMillis()) {
+        context.widgetDataStore.edit {
+            it[Keys.refreshQueued] = false
+            it[Keys.newsRefreshing] = true
+            it[Keys.refreshStartedAtMillis] = startedAtMillis
+            it[Keys.lastRefreshStartedAtMillis] = startedAtMillis
+            it.remove(Keys.lastRefreshFinishedAtMillis)
+            it.remove(Keys.lastRefreshResult)
+            it[Keys.lastRefreshMessage] = "更新中"
+        }
+    }
+
+    suspend fun finishRefresh(result: RefreshResult, message: String, finishedAtMillis: Long = System.currentTimeMillis()) {
+        context.widgetDataStore.edit {
+            it[Keys.refreshQueued] = false
+            it[Keys.newsRefreshing] = false
+            it[Keys.weatherRefreshing] = false
+            it[Keys.refreshStartedAtMillis] = 0L
+            it[Keys.lastRefreshFinishedAtMillis] = finishedAtMillis
+            it[Keys.lastRefreshResult] = result.name
+            it[Keys.lastRefreshMessage] = message
+        }
+    }
+
+    suspend fun markRefreshStale(message: String = "前回更新が中断されました") {
+        finishRefresh(RefreshResult.Stale, message)
+    }
+
+    suspend fun saveWidgetUpdateSuccess(updatedAtMillis: Long = System.currentTimeMillis()) {
+        context.widgetDataStore.edit {
+            it[Keys.lastWidgetUpdatedAtMillis] = updatedAtMillis
+            it.remove(Keys.lastWidgetUpdateError)
+        }
+    }
+
+    suspend fun saveWidgetUpdateError(message: String) {
+        context.widgetDataStore.edit { it[Keys.lastWidgetUpdateError] = message }
+    }
+
+    suspend fun saveCurrentLocation(latitude: Double, longitude: Double, label: String?) {
+        context.widgetDataStore.edit {
+            it[Keys.lastCurrentLatitude] = latitude
+            it[Keys.lastCurrentLongitude] = longitude
+            if (label.isNullOrBlank()) {
+                it.remove(Keys.lastCurrentLocationLabel)
+            } else {
+                it[Keys.lastCurrentLocationLabel] = label
             }
         }
     }
@@ -280,6 +345,15 @@ class WidgetPreferences(private val context: Context) {
         val weatherRefreshing = booleanPreferencesKey("weather_refreshing")
         val lastNewsError = stringPreferencesKey("last_news_error")
         val lastWeatherError = stringPreferencesKey("last_weather_error")
+        val lastRefreshStartedAtMillis = longPreferencesKey("last_refresh_started_at_millis")
+        val lastRefreshFinishedAtMillis = longPreferencesKey("last_refresh_finished_at_millis")
+        val lastRefreshResult = stringPreferencesKey("last_refresh_result")
+        val lastRefreshMessage = stringPreferencesKey("last_refresh_message")
+        val lastWidgetUpdatedAtMillis = longPreferencesKey("last_widget_updated_at_millis")
+        val lastWidgetUpdateError = stringPreferencesKey("last_widget_update_error")
+        val lastCurrentLatitude = doublePreferencesKey("last_current_latitude")
+        val lastCurrentLongitude = doublePreferencesKey("last_current_longitude")
+        val lastCurrentLocationLabel = stringPreferencesKey("last_current_location_label")
         val launcherAppSlotsJson = stringPreferencesKey("launcher_app_slots_json")
         val launcherAppsJson = stringPreferencesKey("launcher_apps_json")
     }
