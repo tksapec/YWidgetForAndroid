@@ -21,6 +21,7 @@ import androidx.work.BackoffPolicy
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.tksapec.ywidget.data.PARTIAL_NEWS_ERROR_MESSAGE
+import com.tksapec.ywidget.data.LOCATION_PERMISSION_DENIED_MESSAGE
 import com.tksapec.ywidget.data.NewsItem
 import com.tksapec.ywidget.data.RefreshResult
 import com.tksapec.ywidget.data.WeatherLocationMode
@@ -30,6 +31,7 @@ import com.tksapec.ywidget.data.CURRENT_LOCATION_UNAVAILABLE_MESSAGE
 import com.tksapec.ywidget.data.isRefreshDue
 import com.tksapec.ywidget.data.hasStaleRefreshState
 import com.tksapec.ywidget.data.summarizeNewsFetchResults
+import com.tksapec.ywidget.data.classifyNewsRefresh
 import com.tksapec.ywidget.data.userFacingWeatherErrorMessage
 import com.tksapec.ywidget.network.RssClient
 import com.tksapec.ywidget.network.WeatherClient
@@ -93,6 +95,7 @@ class RefreshWorker(
                 if (firstCancellation != null) throw firstCancellation
 
                 val newsSummary = summarizeNewsFetchResults(categoryResults)
+                val newsOutcome = classifyNewsRefresh(newsSummary)
 
                 if (newsSummary.hasNews) {
                     preferences.saveNews(
@@ -103,16 +106,16 @@ class RefreshWorker(
                         },
                     )
                     safeUpdateAll(applicationContext)
-                    if (newsSummary.failedCategoryCount > 0) {
-                        finalRefreshResult = RefreshResult.PartialSuccess
-                        finalRefreshMessage = "一部カテゴリの取得に失敗"
+                    if (newsOutcome.result != RefreshResult.Success) {
+                        finalRefreshResult = newsOutcome.result
+                        finalRefreshMessage = newsOutcome.message
                     }
                     if (newsSummary.failures.any { it.isTransientFailure() }) retryNeeded = true
                 } else {
                     preferences.saveNewsError("\u30CB\u30E5\u30FC\u30B9\u53D6\u5F97\u5931\u6557")
                     safeUpdateAll(applicationContext)
-                    finalRefreshResult = RefreshResult.Failed
-                    finalRefreshMessage = "ニュース取得失敗"
+                    finalRefreshResult = newsOutcome.result
+                    finalRefreshMessage = newsOutcome.message
                     retryNeeded = newsSummary.failures.isEmpty() ||
                         newsSummary.failures.any { it.isTransientFailure() }
                 }
@@ -205,9 +208,8 @@ class RefreshWorker(
         settings: WidgetSettings,
         preferences: WidgetPreferences,
     ): WeatherTarget {
-        if (!hasLocationPermission()) {
-            error("\u4F4D\u7F6E\u60C5\u5831\u672A\u8A31\u53EF")
-        }
+        val locationPermissionGranted = hasLocationPermission()
+        if (!locationPermissionGranted) return selectCurrentWeatherTarget(false, null, settings)
         val location = try {
             withTimeoutOrNull(CURRENT_LOCATION_TOTAL_TIMEOUT_MILLIS) {
                 val client = LocationServices.getFusedLocationProviderClient(applicationContext)
@@ -231,28 +233,15 @@ class RefreshWorker(
             null
         }
 
-        if (location == null) {
-            val cachedLatitude = settings.lastCurrentLatitude
-            val cachedLongitude = settings.lastCurrentLongitude
-            if (cachedLatitude != null && cachedLongitude != null) {
-                Log.w("RefreshWorker", "Current location unavailable; using cached location")
-                return WeatherTarget(
-                    latitude = cachedLatitude,
-                    longitude = cachedLongitude,
-                    label = settings.lastCurrentLocationLabel,
-                )
-            }
-            error(CURRENT_LOCATION_UNAVAILABLE_MESSAGE)
+        val currentTarget = location?.let {
+            val label = reverseGeocodeSafely(it.latitude, it.longitude)
+            preferences.saveCurrentLocation(it.latitude, it.longitude, label)
+            WeatherTarget(it.latitude, it.longitude, label)
         }
-
-        val label = reverseGeocodeSafely(location.latitude, location.longitude)
-        preferences.saveCurrentLocation(location.latitude, location.longitude, label)
-
-        return WeatherTarget(
-            latitude = location.latitude,
-            longitude = location.longitude,
-            label = label,
-        )
+        if (currentTarget == null && settings.lastCurrentLatitude != null && settings.lastCurrentLongitude != null) {
+            Log.w("RefreshWorker", "Current location unavailable; using cached location")
+        }
+        return selectCurrentWeatherTarget(locationPermissionGranted, currentTarget, settings)
     }
 
     private suspend fun resolveFixedLocation(
@@ -354,12 +343,6 @@ class RefreshWorker(
             .joinToString("")
     }
 
-    private data class WeatherTarget(
-        val latitude: Double,
-        val longitude: Double,
-        val label: String?,
-    )
-
     companion object {
         private const val UNIQUE_REFRESH_WORK = "yahoo_news_widget_refresh"
         private const val UNIQUE_PERIODIC_WORK = "yahoo_news_widget_periodic_refresh"
@@ -452,4 +435,25 @@ class RefreshWorker(
             return status != null && status >= HttpURLConnection.HTTP_INTERNAL_ERROR
         }
     }
+}
+
+internal data class WeatherTarget(
+    val latitude: Double,
+    val longitude: Double,
+    val label: String?,
+)
+
+internal fun selectCurrentWeatherTarget(
+    locationPermissionGranted: Boolean,
+    currentTarget: WeatherTarget?,
+    settings: WidgetSettings,
+): WeatherTarget {
+    if (!locationPermissionGranted) error(LOCATION_PERMISSION_DENIED_MESSAGE)
+    currentTarget?.let { return it }
+    val latitude = settings.lastCurrentLatitude
+    val longitude = settings.lastCurrentLongitude
+    if (latitude != null && longitude != null) {
+        return WeatherTarget(latitude, longitude, settings.lastCurrentLocationLabel)
+    }
+    error(CURRENT_LOCATION_UNAVAILABLE_MESSAGE)
 }

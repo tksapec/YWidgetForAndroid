@@ -81,21 +81,31 @@ class YWidget : GlanceAppWidget() {
 
 suspend fun safeUpdateAll(context: Context): Boolean {
     val preferences = WidgetPreferences(context)
-    val updateError = runCatching {
-        YWidget().updateAll(context)
-    }.exceptionOrNull()
+    return performWidgetUpdate(
+        updateAll = { YWidget().updateAll(context) },
+        saveSuccess = { preferences.saveWidgetUpdateSuccess() },
+        saveError = { preferences.saveWidgetUpdateError(it) },
+        logUpdateError = { Log.e("YWidget", "Failed to update Glance widgets", it) },
+        logPersistenceError = { Log.w("YWidget", "Failed to persist widget update diagnostics", it) },
+    )
+}
+
+internal suspend fun performWidgetUpdate(
+    updateAll: suspend () -> Unit,
+    saveSuccess: suspend () -> Unit,
+    saveError: suspend (String) -> Unit,
+    logUpdateError: (Throwable) -> Unit = {},
+    logPersistenceError: (Throwable) -> Unit = {},
+): Boolean {
+    val updateError = runCatching { updateAll() }.exceptionOrNull()
     if (updateError != null) {
-        val error = updateError
-        Log.e("YWidget", "Failed to update Glance widgets", error)
+        logUpdateError(updateError)
         runCatching {
-            preferences.saveWidgetUpdateError(error.message?.take(160) ?: error.javaClass.simpleName)
-        }.onFailure { persistenceError ->
-            Log.w("YWidget", "Failed to persist widget update error", persistenceError)
-        }
+            saveError(updateError.message?.take(160) ?: updateError.javaClass.simpleName)
+        }.onFailure(logPersistenceError)
         return false
     }
-    runCatching { preferences.saveWidgetUpdateSuccess() }
-        .onFailure { Log.w("YWidget", "Widget updated but diagnostics could not be saved", it) }
+    runCatching { saveSuccess() }.onFailure(logPersistenceError)
     return true
 }
 

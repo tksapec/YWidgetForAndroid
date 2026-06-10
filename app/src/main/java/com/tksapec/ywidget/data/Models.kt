@@ -97,6 +97,22 @@ data class NewsFetchSummary(
     val hasNews: Boolean = news.isNotEmpty()
 }
 
+internal data class NewsRefreshOutcome(
+    val result: RefreshResult,
+    val message: String,
+)
+
+internal fun classifyNewsRefresh(summary: NewsFetchSummary): NewsRefreshOutcome {
+    return when {
+        !summary.hasNews -> NewsRefreshOutcome(RefreshResult.Failed, "ニュース取得失敗")
+        summary.failedCategoryCount > 0 -> NewsRefreshOutcome(
+            RefreshResult.PartialSuccess,
+            "一部カテゴリの取得に失敗",
+        )
+        else -> NewsRefreshOutcome(RefreshResult.Success, "更新完了")
+    }
+}
+
 fun summarizeNewsFetchResults(results: List<Result<List<NewsItem>>>): NewsFetchSummary {
     val news = results
         .flatMap { it.getOrDefault(emptyList()) }
@@ -133,7 +149,7 @@ fun WidgetSettings.isRefreshQueuedActive(now: Long): Boolean {
     return refreshQueued && isRefreshStateActive(now)
 }
 
-fun WidgetSettings.shouldCleanupStaleRefreshQueue(now: Long): Boolean {
+fun WidgetSettings.shouldCleanupStaleRefreshState(now: Long): Boolean {
     return hasRefreshState() && !isRefreshStateActive(now)
 }
 
@@ -155,6 +171,7 @@ const val PARTIAL_NEWS_ERROR_MESSAGE: String =
     "\u4E00\u90E8\u30AB\u30C6\u30B4\u30EA\u306E\u53D6\u5F97\u306B\u5931\u6557"
 const val CURRENT_LOCATION_UNAVAILABLE_MESSAGE: String =
     "\u73FE\u5728\u5730\u3092\u53D6\u5F97\u3067\u304D\u307E\u305B\u3093\u3067\u3057\u305F\u3002\u56FA\u5B9A\u5730\u57DF\u306E\u4F7F\u7528\u3092\u304A\u3059\u3059\u3081\u3057\u307E\u3059\u3002"
+const val LOCATION_PERMISSION_DENIED_MESSAGE: String = "\u4F4D\u7F6E\u60C5\u5831\u672A\u8A31\u53EF"
 const val WEATHER_DATA_FORMAT_ERROR_MESSAGE: String = "\u5929\u6C17\u30C7\u30FC\u30BF\u5F62\u5F0F\u30A8\u30E9\u30FC"
 const val WEATHER_CODE_ERROR_MESSAGE: String = "\u5929\u6C17\u30B3\u30FC\u30C9\u53D6\u5F97\u5931\u6557"
 const val WEATHER_TEMPERATURE_ERROR_MESSAGE: String = "\u6C17\u6E29\u53D6\u5F97\u5931\u6557"
@@ -170,7 +187,7 @@ fun userFacingWeatherErrorMessage(error: Throwable): String {
         return CURRENT_LOCATION_UNAVAILABLE_MESSAGE
     }
     return when (rawMessage) {
-        "\u4F4D\u7F6E\u60C5\u5831\u672A\u8A31\u53EF" -> "\u4F4D\u7F6E\u60C5\u5831\u304C\u8A31\u53EF\u3055\u308C\u3066\u3044\u307E\u305B\u3093"
+        LOCATION_PERMISSION_DENIED_MESSAGE -> "\u4F4D\u7F6E\u60C5\u5831\u304C\u8A31\u53EF\u3055\u308C\u3066\u3044\u307E\u305B\u3093"
         "\u73FE\u5728\u5730\u53D6\u5F97\u5931\u6557",
         CURRENT_LOCATION_UNAVAILABLE_MESSAGE,
         -> CURRENT_LOCATION_UNAVAILABLE_MESSAGE

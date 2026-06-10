@@ -154,33 +154,53 @@ class WidgetSettingsTest {
     }
 
     @Test
-    fun cleanupStaleRefreshQueueIsTrueOnlyForExpiredQueue() {
+    fun cleanupStaleRefreshStateIsTrueForExpiredQueue() {
         val settings = WidgetSettings(
             refreshQueued = true,
             refreshStartedAtMillis = 1_000L,
         )
 
-        assertTrue(settings.shouldCleanupStaleRefreshQueue(now = 1_000L + REFRESH_ACTIVE_TIMEOUT_MILLIS))
+        assertTrue(settings.shouldCleanupStaleRefreshState(now = 1_000L + REFRESH_ACTIVE_TIMEOUT_MILLIS))
     }
 
     @Test
-    fun cleanupStaleRefreshQueueIsFalseForActiveQueue() {
+    fun cleanupStaleRefreshStateIsTrueForExpiredNewsRefresh() {
+        val settings = WidgetSettings(
+            newsRefreshing = true,
+            refreshStartedAtMillis = 1_000L,
+        )
+
+        assertTrue(settings.shouldCleanupStaleRefreshState(now = 1_000L + REFRESH_ACTIVE_TIMEOUT_MILLIS))
+    }
+
+    @Test
+    fun cleanupStaleRefreshStateIsTrueForExpiredWeatherRefresh() {
+        val settings = WidgetSettings(
+            weatherRefreshing = true,
+            refreshStartedAtMillis = 1_000L,
+        )
+
+        assertTrue(settings.shouldCleanupStaleRefreshState(now = 1_000L + REFRESH_ACTIVE_TIMEOUT_MILLIS))
+    }
+
+    @Test
+    fun cleanupStaleRefreshStateIsFalseForActiveQueue() {
         val settings = WidgetSettings(
             refreshQueued = true,
             refreshStartedAtMillis = 1_000L,
         )
 
-        assertFalse(settings.shouldCleanupStaleRefreshQueue(now = 1_000L + REFRESH_ACTIVE_TIMEOUT_MILLIS - 1L))
+        assertFalse(settings.shouldCleanupStaleRefreshState(now = 1_000L + REFRESH_ACTIVE_TIMEOUT_MILLIS - 1L))
     }
 
     @Test
-    fun cleanupStaleRefreshQueueIsFalseWhenQueueIsNotSet() {
+    fun cleanupStaleRefreshStateIsFalseWhenNoStateIsSet() {
         val settings = WidgetSettings(
             refreshQueued = false,
             refreshStartedAtMillis = 1_000L,
         )
 
-        assertFalse(settings.shouldCleanupStaleRefreshQueue(now = 1_000L + REFRESH_ACTIVE_TIMEOUT_MILLIS))
+        assertFalse(settings.shouldCleanupStaleRefreshState(now = 1_000L + REFRESH_ACTIVE_TIMEOUT_MILLIS))
     }
 
     @Test
@@ -239,6 +259,28 @@ class WidgetSettingsTest {
         assertFalse(summary.hasNews)
         assertEquals(2, summary.failedCategoryCount)
         assertTrue(summary.failures.isEmpty())
+    }
+
+    @Test
+    fun newsRefreshClassificationIsPartialWhenOneCategorySucceeds() {
+        val summary = NewsFetchSummary(
+            news = listOf(NewsItem("A", "https://example.com/a")),
+            failedCategoryCount = 1,
+            failures = listOf(IllegalStateException("failed")),
+        )
+
+        assertEquals(RefreshResult.PartialSuccess, classifyNewsRefresh(summary).result)
+    }
+
+    @Test
+    fun newsRefreshClassificationFailsOnlyWhenNoNewsWasFetched() {
+        val summary = NewsFetchSummary(
+            news = emptyList(),
+            failedCategoryCount = 2,
+            failures = listOf(IllegalStateException("failed")),
+        )
+
+        assertEquals(RefreshResult.Failed, classifyNewsRefresh(summary).result)
     }
 
     @Test

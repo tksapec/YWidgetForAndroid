@@ -8,7 +8,7 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.tksapec.ywidget.data.REFRESH_ACTIVE_TIMEOUT_MILLIS
 import com.tksapec.ywidget.data.WidgetPreferences
-import com.tksapec.ywidget.data.shouldCleanupStaleRefreshQueue
+import com.tksapec.ywidget.data.shouldCleanupStaleRefreshState
 import com.tksapec.ywidget.widget.safeUpdateAll
 import java.util.concurrent.TimeUnit
 
@@ -19,7 +19,7 @@ class RefreshStateCleanupWorker(
     override suspend fun doWork(): Result {
         val preferences = WidgetPreferences(applicationContext)
         val settings = preferences.currentSettings()
-        if (settings.shouldCleanupStaleRefreshQueue(System.currentTimeMillis())) {
+        if (settings.shouldCleanupStaleRefreshState(System.currentTimeMillis())) {
             preferences.markRefreshStale()
             safeUpdateAll(applicationContext)
         }
