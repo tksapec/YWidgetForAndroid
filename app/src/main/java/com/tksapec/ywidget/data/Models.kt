@@ -150,11 +150,13 @@ fun WidgetSettings.isRefreshQueuedActive(now: Long): Boolean {
 }
 
 fun WidgetSettings.shouldCleanupStaleRefreshState(now: Long): Boolean {
-    return hasRefreshState() && !isRefreshStateActive(now)
+    return hasStaleRefreshState(now)
 }
 
 fun WidgetSettings.hasStaleRefreshState(now: Long): Boolean {
-    return hasRefreshState() && !isRefreshStateActive(now)
+    return hasRefreshState() &&
+        !hasCompletedRefreshAfterCurrentStart() &&
+        !isRefreshStateWithinTimeout(now)
 }
 
 private fun WidgetSettings.hasRefreshState(): Boolean {
@@ -162,8 +164,41 @@ private fun WidgetSettings.hasRefreshState(): Boolean {
 }
 
 private fun WidgetSettings.isRefreshStateActive(now: Long): Boolean {
+    return !hasCompletedRefreshAfterCurrentStart() && isRefreshStateWithinTimeout(now)
+}
+
+private fun WidgetSettings.isRefreshStateWithinTimeout(now: Long): Boolean {
     return refreshStartedAtMillis > 0L &&
         now - refreshStartedAtMillis < REFRESH_ACTIVE_TIMEOUT_MILLIS
+}
+
+internal fun WidgetSettings.hasCompletedRefreshAfterCurrentStart(): Boolean {
+    return lastRefreshFinishedAtMillis > 0L &&
+        refreshStartedAtMillis > 0L &&
+        lastRefreshFinishedAtMillis >= refreshStartedAtMillis &&
+        lastRefreshResult != null
+}
+
+internal fun WidgetSettings.needsRefreshStateCleanupAfterFinish(): Boolean {
+    return newsRefreshing || weatherRefreshing || refreshQueued || refreshStartedAtMillis != 0L
+}
+
+internal fun WidgetSettings.refreshDiagnosticSummary(): String {
+    return "newsRefreshing=$newsRefreshing, " +
+        "weatherRefreshing=$weatherRefreshing, " +
+        "refreshQueued=$refreshQueued, " +
+        "refreshStartedAt=$refreshStartedAtMillis, " +
+        "lastRefreshFinishedAt=$lastRefreshFinishedAtMillis, " +
+        "lastRefreshResult=$lastRefreshResult, " +
+        "newsUpdatedAt=$newsUpdatedAtMillis, " +
+        "weatherUpdatedAt=$weatherUpdatedAtMillis, " +
+        "newsSize=${news.size}, " +
+        "weatherCode=$weatherCode, " +
+        "temperature=$temperatureCelsius, " +
+        "lastNewsError=$lastNewsError, " +
+        "lastWeatherError=$lastWeatherError, " +
+        "lastWidgetUpdatedAt=$lastWidgetUpdatedAtMillis, " +
+        "lastWidgetUpdateError=$lastWidgetUpdateError"
 }
 
 const val REFRESH_ACTIVE_TIMEOUT_MILLIS: Long = 2 * 60 * 1_000L

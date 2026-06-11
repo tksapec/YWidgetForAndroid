@@ -56,6 +56,7 @@ import com.tksapec.ywidget.data.WeatherLocationMode
 import com.tksapec.ywidget.data.isNewsRefreshingActive
 import com.tksapec.ywidget.data.isRefreshQueuedActive
 import com.tksapec.ywidget.data.isWeatherRefreshingActive
+import com.tksapec.ywidget.data.refreshDiagnosticSummary
 import com.tksapec.ywidget.data.weatherIconForCode
 import com.tksapec.ywidget.work.RefreshStateCleanupWorker
 import com.tksapec.ywidget.work.RefreshWorker
@@ -81,13 +82,22 @@ class YWidget : GlanceAppWidget() {
 
 suspend fun safeUpdateAll(context: Context): Boolean {
     val preferences = WidgetPreferences(context)
-    return performWidgetUpdate(
+    logWidgetState("before updateAll", preferences)
+    val result = performWidgetUpdate(
         updateAll = { YWidget().updateAll(context) },
         saveSuccess = { preferences.saveWidgetUpdateSuccess() },
         saveError = { preferences.saveWidgetUpdateError(it) },
         logUpdateError = { Log.e("YWidget", "Failed to update Glance widgets", it) },
         logPersistenceError = { Log.w("YWidget", "Failed to persist widget update diagnostics", it) },
     )
+    logWidgetState(if (result) "after updateAll success" else "after updateAll failure", preferences)
+    return result
+}
+
+private suspend fun logWidgetState(stage: String, preferences: WidgetPreferences) {
+    runCatching { preferences.currentSettings() }
+        .onSuccess { Log.d("YWidget", "$stage: ${it.refreshDiagnosticSummary()}") }
+        .onFailure { Log.w("YWidget", "Failed to read widget state for $stage", it) }
 }
 
 internal suspend fun performWidgetUpdate(
@@ -175,63 +185,44 @@ private fun RowScope.HeaderTitle(settings: WidgetSettings) {
 
 @Composable
 private fun WeatherText(settings: WidgetSettings, now: Long) {
-    val code = settings.weatherCode
-    val temperature = settings.temperatureCelsius
-    if (settings.weatherLocationMode == WeatherLocationMode.Disabled) return
-
-    val error = settings.lastWeatherError
-    if (settings.isWeatherRefreshingActive(now)) {
-        Text(
-            text = "\u5929\u6C17\u66F4\u65B0\u4E2D...",
-            modifier = GlanceModifier.padding(end = 8.dp),
-            style = TextStyle(
-                color = ColorProvider(Color(0xFFB8B8B8)),
-                fontSize = 11.sp,
-            ),
-            maxLines = 1,
-        )
-        return
-    }
-
-    if (error != null && code != null && temperature != null) {
-        Text(
-            text = "\u6700\u7D42\u6210\u529F: ${formatUpdatedAt(settings.weatherUpdatedAtMillis)} / \u5929\u6C17\u66F4\u65B0\u5931\u6557",
-            modifier = GlanceModifier.padding(end = 8.dp),
-            style = TextStyle(
-                color = ColorProvider(Color(0xFFFFC268)),
-                fontSize = 10.sp,
-            ),
-            maxLines = 1,
-        )
-        return
-    }
-
-    if (!settings.weatherEnabled || code == null || temperature == null) {
-        if (error != null) {
-            Text(
-                text = error,
-                modifier = GlanceModifier.padding(end = 8.dp),
-                style = TextStyle(
-                    color = ColorProvider(Color(0xFFFFC268)),
-                    fontSize = 11.sp,
-                ),
-                maxLines = 1,
-            )
-        }
-        return
-    }
-
-    val location = settings.locationLabel?.takeIf { it.isNotBlank() }?.let { "$it " }.orEmpty()
-
+    val display = weatherDisplay(settings, now) ?: return
     Text(
-        text = "$location${weatherIconForCode(code)} ${temperature.toInt()}\u2103",
+        text = display.text,
         modifier = GlanceModifier.padding(end = 8.dp),
         style = TextStyle(
-            color = ColorProvider(Color(0xFFE4E4E4)),
-            fontSize = 12.sp,
+            color = ColorProvider(if (display.isWarning) Color(0xFFFFC268) else Color(0xFFE4E4E4)),
+            fontSize = display.fontSizeSp.sp,
         ),
         maxLines = 1,
     )
+}
+
+internal data class WeatherDisplay(
+    val text: String,
+    val isWarning: Boolean,
+    val fontSizeSp: Int,
+)
+
+internal fun weatherDisplay(settings: WidgetSettings, now: Long): WeatherDisplay? {
+    if (settings.weatherLocationMode == WeatherLocationMode.Disabled) return null
+    val code = settings.weatherCode
+    val temperature = settings.temperatureCelsius
+    val error = settings.lastWeatherError
+    val refreshing = settings.isWeatherRefreshingActive(now)
+    if (!settings.weatherEnabled || code == null || temperature == null) {
+        if (refreshing) {
+            return WeatherDisplay("\u5929\u6C17\u66F4\u65B0\u4E2D...", isWarning = false, fontSizeSp = 11)
+        }
+        return error?.let { WeatherDisplay(it, isWarning = true, fontSizeSp = 11) }
+    }
+
+    val location = settings.locationLabel?.takeIf { it.isNotBlank() }?.let { "$it " }.orEmpty()
+    val weather = "$location${weatherIconForCode(code)} ${temperature.toInt()}\u2103"
+    return when {
+        refreshing -> WeatherDisplay("$weather / \u66F4\u65B0\u4E2D", isWarning = false, fontSizeSp = 10)
+        error != null -> WeatherDisplay("$weather / \u66F4\u65B0\u5931\u6557", isWarning = true, fontSizeSp = 10)
+        else -> WeatherDisplay(weather, isWarning = false, fontSizeSp = 12)
+    }
 }
 
 @Composable
@@ -314,7 +305,7 @@ private fun TodayButton() {
 @Composable
 private fun ColumnScope.NewsList(settings: WidgetSettings, now: Long) {
     val modifier = GlanceModifier.defaultWeight().fillMaxWidth()
-    val news = settings.news.take(settings.displayCount)
+    val news = newsForDisplay(settings)
 
     if (news.isEmpty()) {
         Box(
@@ -351,6 +342,10 @@ private fun ColumnScope.NewsList(settings: WidgetSettings, now: Long) {
     }
 }
 
+internal fun newsForDisplay(settings: WidgetSettings): List<NewsItem> {
+    return settings.news.take(settings.displayCount)
+}
+
 @Composable
 private fun Divider() {
     Box(
@@ -375,10 +370,16 @@ private fun openLauncherAppAction(packageName: String) = actionRunCallback<OpenL
 )
 
 internal fun statusText(settings: WidgetSettings, now: Long): String {
-    if (settings.isNewsRefreshingActive(now)) return "\u30CB\u30E5\u30FC\u30B9\u66F4\u65B0\u4E2D..."
-    if (settings.isRefreshQueuedActive(now)) return "\u66F4\u65B0\u4E88\u7D04\u4E2D..."
     if (settings.hasStaleRefreshState(now)) return "\u524D\u56DE\u66F4\u65B0\u304C\u4E2D\u65AD\u3055\u308C\u307E\u3057\u305F"
     if (settings.lastRefreshResult == RefreshResult.Stale) return "\u524D\u56DE\u66F4\u65B0\u304C\u4E2D\u65AD\u3055\u308C\u307E\u3057\u305F"
+    if (settings.isRefreshQueuedActive(now)) return "\u66F4\u65B0\u4E88\u7D04\u4E2D..."
+    if (settings.isNewsRefreshingActive(now)) {
+        return if (settings.news.isEmpty()) {
+            "\u30CB\u30E5\u30FC\u30B9\u66F4\u65B0\u4E2D..."
+        } else {
+            "\u66F4\u65B0\u4E2D / \u6700\u7D42: ${formatUpdatedAt(settings.newsUpdatedAtMillis)}"
+        }
+    }
     if (settings.lastNewsError != null && settings.newsUpdatedAtMillis <= 0L) return "\u30CB\u30E5\u30FC\u30B9\u53D6\u5F97\u5931\u6557"
     if (settings.newsUpdatedAtMillis <= 0L) return "\u672A\u53D6\u5F97 / \u21BB\u3067\u66F4\u65B0"
     val updatedAt = formatUpdatedAt(settings.newsUpdatedAtMillis)

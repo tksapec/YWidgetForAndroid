@@ -1,6 +1,8 @@
 package com.tksapec.ywidget.data
 
 import android.content.Context
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.doublePreferencesKey
 import androidx.datastore.preferences.core.edit
@@ -16,13 +18,15 @@ import kotlinx.serialization.json.Json
 
 val Context.widgetDataStore by preferencesDataStore(name = "widget_settings")
 
-class WidgetPreferences(private val context: Context) {
+class WidgetPreferences internal constructor(private val dataStore: DataStore<Preferences>) {
+    constructor(context: Context) : this(context.widgetDataStore)
+
     private val json = Json {
         ignoreUnknownKeys = true
         encodeDefaults = true
     }
 
-    val settingsFlow: Flow<WidgetSettings> = context.widgetDataStore.data.map { preferences ->
+    val settingsFlow: Flow<WidgetSettings> = dataStore.data.map { preferences ->
         val category = NewsCategory.fromName(preferences[Keys.category] ?: NewsCategory.Top.name)
         val selectedCategories = decodeCategories(
             preferences[Keys.selectedCategories],
@@ -78,35 +82,35 @@ class WidgetPreferences(private val context: Context) {
     suspend fun currentSettings(): WidgetSettings = settingsFlow.first()
 
     suspend fun updateCategory(category: NewsCategory) {
-        context.widgetDataStore.edit { it[Keys.category] = category.name }
+        dataStore.edit { it[Keys.category] = category.name }
     }
 
     suspend fun updateSelectedCategories(categories: Set<NewsCategory>) {
         val safeCategories = orderedCategories(categories).ifEmpty { listOf(NewsCategory.Top) }
-        context.widgetDataStore.edit {
+        dataStore.edit {
             it[Keys.selectedCategories] = safeCategories.joinToString(",") { category -> category.name }
             it[Keys.category] = safeCategories.first().name
         }
     }
 
     suspend fun updateDisplayCount(count: Int) {
-        context.widgetDataStore.edit { it[Keys.displayCount] = count.coerceIn(3, 8) }
+        dataStore.edit { it[Keys.displayCount] = count.coerceIn(3, 8) }
     }
 
     suspend fun updateDisplayStyle(style: DisplayStyle) {
-        context.widgetDataStore.edit { it[Keys.displayStyle] = style.name }
+        dataStore.edit { it[Keys.displayStyle] = style.name }
     }
 
     suspend fun updateInterval(minutes: Long) {
-        context.widgetDataStore.edit { it[Keys.updateIntervalMinutes] = minutes }
+        dataStore.edit { it[Keys.updateIntervalMinutes] = minutes }
     }
 
     suspend fun updateWeatherEnabled(enabled: Boolean) {
-        context.widgetDataStore.edit { it[Keys.weatherEnabled] = enabled }
+        dataStore.edit { it[Keys.weatherEnabled] = enabled }
     }
 
     suspend fun updateWeatherLocationMode(mode: WeatherLocationMode) {
-        context.widgetDataStore.edit {
+        dataStore.edit {
             it[Keys.weatherLocationMode] = mode.name
             it[Keys.weatherEnabled] = mode != WeatherLocationMode.Disabled
             if (mode == WeatherLocationMode.Disabled) {
@@ -116,7 +120,7 @@ class WidgetPreferences(private val context: Context) {
     }
 
     suspend fun updateFixedLocationQuery(query: String) {
-        context.widgetDataStore.edit {
+        dataStore.edit {
             it[Keys.fixedLocationQuery] = query.trim()
             it.remove(Keys.fixedLatitude)
             it.remove(Keys.fixedLongitude)
@@ -124,7 +128,7 @@ class WidgetPreferences(private val context: Context) {
     }
 
     suspend fun saveFixedLocation(query: String, latitude: Double, longitude: Double, label: String) {
-        context.widgetDataStore.edit {
+        dataStore.edit {
             it[Keys.fixedLocationQuery] = query.trim()
             it[Keys.fixedLatitude] = latitude
             it[Keys.fixedLongitude] = longitude
@@ -136,7 +140,7 @@ class WidgetPreferences(private val context: Context) {
     }
 
     suspend fun saveNews(news: List<NewsItem>, updatedAtMillis: Long, warningMessage: String? = null) {
-        context.widgetDataStore.edit {
+        dataStore.edit {
             it[Keys.newsJson] = json.encodeToString(news)
             it[Keys.newsUpdatedAtMillis] = updatedAtMillis
             it[Keys.newsRefreshing] = false
@@ -149,14 +153,14 @@ class WidgetPreferences(private val context: Context) {
     }
 
     suspend fun saveNewsError(message: String) {
-        context.widgetDataStore.edit {
+        dataStore.edit {
             it[Keys.lastNewsError] = message
             it[Keys.newsRefreshing] = false
         }
     }
 
     suspend fun updateNewsRefreshing(refreshing: Boolean) {
-        context.widgetDataStore.edit {
+        dataStore.edit {
             it[Keys.newsRefreshing] = refreshing
             if (refreshing) {
                 it[Keys.refreshQueued] = false
@@ -166,7 +170,7 @@ class WidgetPreferences(private val context: Context) {
     }
 
     suspend fun updateRefreshQueued(queued: Boolean) {
-        context.widgetDataStore.edit {
+        dataStore.edit {
             it[Keys.refreshQueued] = queued
             if (queued) {
                 val now = System.currentTimeMillis()
@@ -180,7 +184,7 @@ class WidgetPreferences(private val context: Context) {
     }
 
     suspend fun markRefreshRunning(startedAtMillis: Long = System.currentTimeMillis()) {
-        context.widgetDataStore.edit {
+        dataStore.edit {
             it[Keys.refreshQueued] = false
             it[Keys.newsRefreshing] = true
             it[Keys.refreshStartedAtMillis] = startedAtMillis
@@ -192,7 +196,7 @@ class WidgetPreferences(private val context: Context) {
     }
 
     suspend fun finishRefresh(result: RefreshResult, message: String, finishedAtMillis: Long = System.currentTimeMillis()) {
-        context.widgetDataStore.edit {
+        dataStore.edit {
             it[Keys.refreshQueued] = false
             it[Keys.newsRefreshing] = false
             it[Keys.weatherRefreshing] = false
@@ -208,18 +212,18 @@ class WidgetPreferences(private val context: Context) {
     }
 
     suspend fun saveWidgetUpdateSuccess(updatedAtMillis: Long = System.currentTimeMillis()) {
-        context.widgetDataStore.edit {
+        dataStore.edit {
             it[Keys.lastWidgetUpdatedAtMillis] = updatedAtMillis
             it.remove(Keys.lastWidgetUpdateError)
         }
     }
 
     suspend fun saveWidgetUpdateError(message: String) {
-        context.widgetDataStore.edit { it[Keys.lastWidgetUpdateError] = message }
+        dataStore.edit { it[Keys.lastWidgetUpdateError] = message }
     }
 
     suspend fun saveCurrentLocation(latitude: Double, longitude: Double, label: String?) {
-        context.widgetDataStore.edit {
+        dataStore.edit {
             it[Keys.lastCurrentLatitude] = latitude
             it[Keys.lastCurrentLongitude] = longitude
             if (label.isNullOrBlank()) {
@@ -236,7 +240,7 @@ class WidgetPreferences(private val context: Context) {
         locationLabel: String?,
         updatedAtMillis: Long,
     ) {
-        context.widgetDataStore.edit {
+        dataStore.edit {
             it[Keys.weatherCode] = code
             it[Keys.temperatureCelsius] = temperatureCelsius
             locationLabel?.let { label -> it[Keys.locationLabel] = label }
@@ -247,14 +251,14 @@ class WidgetPreferences(private val context: Context) {
     }
 
     suspend fun saveWeatherError(message: String) {
-        context.widgetDataStore.edit {
+        dataStore.edit {
             it[Keys.lastWeatherError] = message
             it[Keys.weatherRefreshing] = false
         }
     }
 
     suspend fun updateWeatherRefreshing(refreshing: Boolean) {
-        context.widgetDataStore.edit {
+        dataStore.edit {
             it[Keys.weatherRefreshing] = refreshing
             if (refreshing) {
                 it[Keys.refreshQueued] = false
@@ -264,7 +268,7 @@ class WidgetPreferences(private val context: Context) {
     }
 
     suspend fun clearRefreshState() {
-        context.widgetDataStore.edit {
+        dataStore.edit {
             it[Keys.refreshQueued] = false
             it[Keys.newsRefreshing] = false
             it[Keys.weatherRefreshing] = false
@@ -273,7 +277,7 @@ class WidgetPreferences(private val context: Context) {
     }
 
     suspend fun updateLauncherAppSlots(slots: List<LauncherAppSlot>) {
-        context.widgetDataStore.edit {
+        dataStore.edit {
             it[Keys.launcherAppSlotsJson] = json.encodeToString(normalizeLauncherAppSlots(slots))
             it.remove(Keys.launcherAppsJson)
         }

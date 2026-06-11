@@ -32,6 +32,8 @@ import com.tksapec.ywidget.data.isRefreshDue
 import com.tksapec.ywidget.data.hasStaleRefreshState
 import com.tksapec.ywidget.data.summarizeNewsFetchResults
 import com.tksapec.ywidget.data.classifyNewsRefresh
+import com.tksapec.ywidget.data.needsRefreshStateCleanupAfterFinish
+import com.tksapec.ywidget.data.refreshDiagnosticSummary
 import com.tksapec.ywidget.data.userFacingWeatherErrorMessage
 import com.tksapec.ywidget.network.RssClient
 import com.tksapec.ywidget.network.WeatherClient
@@ -68,8 +70,11 @@ class RefreshWorker(
         var finalRefreshMessage = "更新完了"
 
         try {
-            preferences.markRefreshRunning()
-            safeUpdateAll(applicationContext)
+            prepareRefreshWork(
+                markRunning = { preferences.markRefreshRunning() },
+                enqueueCleanup = { RefreshStateCleanupWorker.enqueue(applicationContext) },
+                updateWidget = { safeUpdateAll(applicationContext) },
+            )
             withContext(Dispatchers.IO) {
                 val settings = preferences.currentSettings()
                 val rssClient = RssClient()
@@ -105,6 +110,7 @@ class RefreshWorker(
                             newsSummary.failedCategoryCount > 0
                         },
                     )
+                    logRefreshState("after saveNews", preferences)
                     safeUpdateAll(applicationContext)
                     if (newsOutcome.result != RefreshResult.Success) {
                         finalRefreshResult = newsOutcome.result
@@ -113,6 +119,7 @@ class RefreshWorker(
                     if (newsSummary.failures.any { it.isTransientFailure() }) retryNeeded = true
                 } else {
                     preferences.saveNewsError("\u30CB\u30E5\u30FC\u30B9\u53D6\u5F97\u5931\u6557")
+                    logRefreshState("after saveNewsError", preferences)
                     safeUpdateAll(applicationContext)
                     finalRefreshResult = newsOutcome.result
                     finalRefreshMessage = newsOutcome.message
@@ -135,10 +142,12 @@ class RefreshWorker(
                                 locationLabel = target.label,
                                 updatedAtMillis = System.currentTimeMillis(),
                             )
+                            logRefreshState("after saveWeather", preferences)
                             safeUpdateAll(applicationContext)
                         }.onFailure { error ->
                             if (error is CancellationException) throw error
                             preferences.saveWeatherError(userFacingWeatherErrorMessage(error))
+                            logRefreshState("after saveWeatherError", preferences)
                             safeUpdateAll(applicationContext)
                             if (finalRefreshResult == RefreshResult.Success) {
                                 finalRefreshResult = RefreshResult.PartialSuccess
@@ -149,6 +158,7 @@ class RefreshWorker(
                     }.onFailure { error ->
                         if (error is CancellationException) throw error
                         preferences.saveWeatherError(userFacingWeatherErrorMessage(error))
+                        logRefreshState("after saveWeatherTargetError", preferences)
                         safeUpdateAll(applicationContext)
                         if (finalRefreshResult == RefreshResult.Success) {
                             finalRefreshResult = RefreshResult.PartialSuccess
@@ -170,6 +180,24 @@ class RefreshWorker(
         } finally {
             withContext(NonCancellable) {
                 preferences.finishRefresh(finalRefreshResult, finalRefreshMessage)
+                var afterFinish = runCatching { preferences.currentSettings() }
+                    .onSuccess { Log.d("RefreshWorker", "after finish: ${it.refreshDiagnosticSummary()}") }
+                    .onFailure { Log.w("RefreshWorker", "Failed to verify refresh state after finish", it) }
+                    .getOrNull()
+                if (afterFinish?.needsRefreshStateCleanupAfterFinish() == true) {
+                    Log.w("RefreshWorker", "Refresh flags remained after finish. Clearing again.")
+                    preferences.clearRefreshState()
+                    afterFinish = runCatching { preferences.currentSettings() }
+                        .onSuccess { Log.d("RefreshWorker", "after forced clear: ${it.refreshDiagnosticSummary()}") }
+                        .onFailure { Log.w("RefreshWorker", "Failed to verify forced refresh-state clear", it) }
+                        .getOrNull()
+                }
+                if (
+                    afterFinish != null &&
+                    (afterFinish.lastRefreshFinishedAtMillis <= 0L || afterFinish.lastRefreshResult == null)
+                ) {
+                    Log.w("RefreshWorker", "Refresh completion metadata is missing after finish.")
+                }
                 safeUpdateAll(applicationContext)
             }
         }
@@ -186,6 +214,12 @@ class RefreshWorker(
                 applicationContext,
                 Manifest.permission.ACCESS_COARSE_LOCATION,
             ) == PackageManager.PERMISSION_GRANTED
+    }
+
+    private suspend fun logRefreshState(stage: String, preferences: WidgetPreferences) {
+        runCatching { preferences.currentSettings() }
+            .onSuccess { Log.d("RefreshWorker", "$stage: ${it.refreshDiagnosticSummary()}") }
+            .onFailure { Log.w("RefreshWorker", "Failed to read refresh state for $stage", it) }
     }
 
     private fun locationPriority(): Int {
@@ -347,7 +381,7 @@ class RefreshWorker(
         private const val UNIQUE_REFRESH_WORK = "yahoo_news_widget_refresh"
         private const val UNIQUE_PERIODIC_WORK = "yahoo_news_widget_periodic_refresh"
         private const val BACKOFF_MINUTES = 10L
-        private const val PERIODIC_TRIGGER_MINUTES = 15L
+        private const val MINIMUM_PERIODIC_INTERVAL_MINUTES = 15L
         private const val LAST_LOCATION_TIMEOUT_MILLIS = 2_000L
         private const val CURRENT_LOCATION_TIMEOUT_MILLIS = 10_000L
         private const val CURRENT_LOCATION_TOTAL_TIMEOUT_MILLIS = 12_000L
@@ -398,7 +432,7 @@ class RefreshWorker(
 
         fun schedulePeriodic(context: Context, intervalMinutes: Long) {
             val request = PeriodicWorkRequestBuilder<RefreshTriggerWorker>(
-                PERIODIC_TRIGGER_MINUTES,
+                periodicIntervalMinutes(intervalMinutes),
                 TimeUnit.MINUTES,
             )
                 .setConstraints(networkConstraints())
@@ -423,6 +457,10 @@ class RefreshWorker(
             .setRequiredNetworkType(NetworkType.CONNECTED)
             .build()
 
+        internal fun periodicIntervalMinutes(intervalMinutes: Long): Long {
+            return intervalMinutes.coerceAtLeast(MINIMUM_PERIODIC_INTERVAL_MINUTES)
+        }
+
         private fun Throwable.isTransientFailure(): Boolean {
             if (this is SocketTimeoutException || this is UnknownHostException || this is IOException) {
                 return true
@@ -435,6 +473,16 @@ class RefreshWorker(
             return status != null && status >= HttpURLConnection.HTTP_INTERNAL_ERROR
         }
     }
+}
+
+internal suspend fun prepareRefreshWork(
+    markRunning: suspend () -> Unit,
+    enqueueCleanup: () -> Unit,
+    updateWidget: suspend () -> Unit,
+) {
+    markRunning()
+    enqueueCleanup()
+    updateWidget()
 }
 
 internal data class WeatherTarget(

@@ -104,6 +104,19 @@ class WidgetSettingsTest {
     }
 
     @Test
+    fun completedNewsRefreshIsNotActiveEvenWhenFlagRemains() {
+        val settings = WidgetSettings(
+            newsRefreshing = true,
+            refreshStartedAtMillis = 1_000L,
+            lastRefreshFinishedAtMillis = 2_000L,
+            lastRefreshResult = RefreshResult.Success,
+        )
+
+        assertFalse(settings.isNewsRefreshingActive(now = 3_000L))
+        assertFalse(settings.hasStaleRefreshState(now = 3_000L))
+    }
+
+    @Test
     fun activeWeatherRefreshIsTrueWithinTimeout() {
         val settings = WidgetSettings(
             weatherRefreshing = true,
@@ -131,6 +144,19 @@ class WidgetSettingsTest {
         )
 
         assertFalse(settings.isWeatherRefreshingActive(now = 60_000L))
+    }
+
+    @Test
+    fun completedWeatherRefreshIsNotActiveEvenWhenFlagRemains() {
+        val settings = WidgetSettings(
+            weatherRefreshing = true,
+            refreshStartedAtMillis = 1_000L,
+            lastRefreshFinishedAtMillis = 2_000L,
+            lastRefreshResult = RefreshResult.Success,
+        )
+
+        assertFalse(settings.isWeatherRefreshingActive(now = 3_000L))
+        assertFalse(settings.hasStaleRefreshState(now = 3_000L))
     }
 
     @Test
