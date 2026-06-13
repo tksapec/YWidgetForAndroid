@@ -45,6 +45,13 @@ class WidgetDisplayStateTest {
     }
 
     @Test
+    fun firstNewsFetchShowsUpdatingWhileActive() {
+        val settings = WidgetSettings(newsRefreshing = true, refreshStartedAtMillis = 1_000L)
+
+        assertEquals("ニュース更新中...", statusText(settings, now = 2_000L))
+    }
+
+    @Test
     fun firstFetchFailureHasNoFakeSuccessTime() {
         val settings = WidgetSettings(lastNewsError = "failed")
 
@@ -62,7 +69,7 @@ class WidgetDisplayStateTest {
     }
 
     @Test
-    fun activeRefreshKeepsExistingNewsAndUsesSupplementalStatus() {
+    fun activeRefreshKeepsExistingNewsAndUsesNormalStatus() {
         val news = NewsItem("Headline", "https://example.com/news")
         val settings = WidgetSettings(
             news = listOf(news),
@@ -73,8 +80,9 @@ class WidgetDisplayStateTest {
 
         assertEquals(listOf(news), newsForDisplay(settings))
         val text = statusText(settings, now = 3_000L)
-        assertTrue(text.startsWith("更新中 / 最終: "))
+        assertTrue(text.startsWith("更新: "))
         assertFalse(text.contains("ニュース更新中..."))
+        assertFalse(text.contains("更新中"))
     }
 
     @Test

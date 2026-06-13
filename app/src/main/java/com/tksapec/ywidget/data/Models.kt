@@ -190,6 +190,7 @@ internal fun WidgetSettings.refreshDiagnosticSummary(): String {
         "refreshStartedAt=$refreshStartedAtMillis, " +
         "lastRefreshFinishedAt=$lastRefreshFinishedAtMillis, " +
         "lastRefreshResult=$lastRefreshResult, " +
+        "lastRefreshMessage=$lastRefreshMessage, " +
         "newsUpdatedAt=$newsUpdatedAtMillis, " +
         "weatherUpdatedAt=$weatherUpdatedAtMillis, " +
         "newsSize=${news.size}, " +

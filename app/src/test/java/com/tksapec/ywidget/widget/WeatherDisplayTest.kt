@@ -74,8 +74,9 @@ class WeatherDisplayTest {
 
         val display = weatherDisplay(settings, now = 2_000L)!!
 
-        assertEquals("東京 ⛅ 24℃ / 更新中", display.text)
+        assertEquals("東京 ⛅ 24℃", display.text)
         assertFalse(display.isWarning)
+        assertFalse(display.text.contains("更新中"))
     }
 
     @Test

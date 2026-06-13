@@ -94,6 +94,12 @@ suspend fun safeUpdateAll(context: Context): Boolean {
     return result
 }
 
+suspend fun redrawAllWidgetsAfterRefreshFinished(context: Context): Boolean {
+    val preferences = WidgetPreferences(context)
+    logWidgetState("before refresh-finished redraw", preferences)
+    return safeUpdateAll(context)
+}
+
 private suspend fun logWidgetState(stage: String, preferences: WidgetPreferences) {
     runCatching { preferences.currentSettings() }
         .onSuccess { Log.d("YWidget", "$stage: ${it.refreshDiagnosticSummary()}") }
@@ -219,7 +225,6 @@ internal fun weatherDisplay(settings: WidgetSettings, now: Long): WeatherDisplay
     val location = settings.locationLabel?.takeIf { it.isNotBlank() }?.let { "$it " }.orEmpty()
     val weather = "$location${weatherIconForCode(code)} ${temperature.toInt()}\u2103"
     return when {
-        refreshing -> WeatherDisplay("$weather / \u66F4\u65B0\u4E2D", isWarning = false, fontSizeSp = 10)
         error != null -> WeatherDisplay("$weather / \u66F4\u65B0\u5931\u6557", isWarning = true, fontSizeSp = 10)
         else -> WeatherDisplay(weather, isWarning = false, fontSizeSp = 12)
     }
@@ -372,13 +377,9 @@ private fun openLauncherAppAction(packageName: String) = actionRunCallback<OpenL
 internal fun statusText(settings: WidgetSettings, now: Long): String {
     if (settings.hasStaleRefreshState(now)) return "\u524D\u56DE\u66F4\u65B0\u304C\u4E2D\u65AD\u3055\u308C\u307E\u3057\u305F"
     if (settings.lastRefreshResult == RefreshResult.Stale) return "\u524D\u56DE\u66F4\u65B0\u304C\u4E2D\u65AD\u3055\u308C\u307E\u3057\u305F"
-    if (settings.isRefreshQueuedActive(now)) return "\u66F4\u65B0\u4E88\u7D04\u4E2D..."
-    if (settings.isNewsRefreshingActive(now)) {
-        return if (settings.news.isEmpty()) {
-            "\u30CB\u30E5\u30FC\u30B9\u66F4\u65B0\u4E2D..."
-        } else {
-            "\u66F4\u65B0\u4E2D / \u6700\u7D42: ${formatUpdatedAt(settings.newsUpdatedAtMillis)}"
-        }
+    if (settings.news.isEmpty()) {
+        if (settings.isRefreshQueuedActive(now)) return "\u66F4\u65B0\u4E88\u7D04\u4E2D..."
+        if (settings.isNewsRefreshingActive(now)) return "\u30CB\u30E5\u30FC\u30B9\u66F4\u65B0\u4E2D..."
     }
     if (settings.lastNewsError != null && settings.newsUpdatedAtMillis <= 0L) return "\u30CB\u30E5\u30FC\u30B9\u53D6\u5F97\u5931\u6557"
     if (settings.newsUpdatedAtMillis <= 0L) return "\u672A\u53D6\u5F97 / \u21BB\u3067\u66F4\u65B0"

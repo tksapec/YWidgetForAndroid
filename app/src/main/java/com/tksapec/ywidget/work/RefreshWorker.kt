@@ -38,6 +38,7 @@ import com.tksapec.ywidget.data.userFacingWeatherErrorMessage
 import com.tksapec.ywidget.network.RssClient
 import com.tksapec.ywidget.network.WeatherClient
 import com.tksapec.ywidget.widget.safeUpdateAll
+import com.tksapec.ywidget.widget.redrawAllWidgetsAfterRefreshFinished
 import com.google.android.gms.tasks.CancellationTokenSource
 import java.io.IOException
 import com.google.android.gms.location.LocationServices
@@ -73,6 +74,9 @@ class RefreshWorker(
             prepareRefreshWork(
                 markRunning = { preferences.markRefreshRunning() },
                 enqueueCleanup = { RefreshStateCleanupWorker.enqueue(applicationContext) },
+                shouldUpdateWidget = {
+                    shouldRedrawWhenRefreshStarts(preferences.currentSettings())
+                },
                 updateWidget = { safeUpdateAll(applicationContext) },
             )
             withContext(Dispatchers.IO) {
@@ -129,7 +133,9 @@ class RefreshWorker(
 
                 if (settings.weatherEnabled && settings.weatherLocationMode != WeatherLocationMode.Disabled) {
                     preferences.updateWeatherRefreshing(true)
-                    safeUpdateAll(applicationContext)
+                    if (shouldRedrawWhenWeatherRefreshStarts(settings)) {
+                        safeUpdateAll(applicationContext)
+                    }
                     runCatching {
                         resolveWeatherTarget(settings = settings, preferences = preferences)
                     }.onSuccess { target ->
@@ -179,26 +185,21 @@ class RefreshWorker(
             result = if (error.isTransientFailure()) Result.retry() else Result.failure()
         } finally {
             withContext(NonCancellable) {
-                preferences.finishRefresh(finalRefreshResult, finalRefreshMessage)
-                var afterFinish = runCatching { preferences.currentSettings() }
-                    .onSuccess { Log.d("RefreshWorker", "after finish: ${it.refreshDiagnosticSummary()}") }
-                    .onFailure { Log.w("RefreshWorker", "Failed to verify refresh state after finish", it) }
-                    .getOrNull()
-                if (afterFinish?.needsRefreshStateCleanupAfterFinish() == true) {
-                    Log.w("RefreshWorker", "Refresh flags remained after finish. Clearing again.")
-                    preferences.clearRefreshState()
-                    afterFinish = runCatching { preferences.currentSettings() }
-                        .onSuccess { Log.d("RefreshWorker", "after forced clear: ${it.refreshDiagnosticSummary()}") }
-                        .onFailure { Log.w("RefreshWorker", "Failed to verify forced refresh-state clear", it) }
-                        .getOrNull()
-                }
-                if (
-                    afterFinish != null &&
-                    (afterFinish.lastRefreshFinishedAtMillis <= 0L || afterFinish.lastRefreshResult == null)
-                ) {
-                    Log.w("RefreshWorker", "Refresh completion metadata is missing after finish.")
-                }
-                safeUpdateAll(applicationContext)
+                finishRefreshAndRedraw(
+                    finishRefresh = {
+                        preferences.finishRefresh(finalRefreshResult, finalRefreshMessage)
+                    },
+                    readSettings = { preferences.currentSettings() },
+                    clearRefreshState = { preferences.clearRefreshState() },
+                    redrawWidgets = {
+                        redrawAllWidgetsAfterRefreshFinished(applicationContext)
+                    },
+                    logState = { stage, state ->
+                        Log.d("RefreshWorker", "$stage: ${state.refreshDiagnosticSummary()}")
+                    },
+                    logFailure = { message, error -> Log.w("RefreshWorker", message, error) },
+                    logWarning = { message -> Log.w("RefreshWorker", message) },
+                )
             }
         }
 
@@ -478,11 +479,55 @@ class RefreshWorker(
 internal suspend fun prepareRefreshWork(
     markRunning: suspend () -> Unit,
     enqueueCleanup: () -> Unit,
+    shouldUpdateWidget: suspend () -> Boolean,
     updateWidget: suspend () -> Unit,
 ) {
     markRunning()
     enqueueCleanup()
-    updateWidget()
+    if (shouldUpdateWidget()) updateWidget()
+}
+
+internal fun shouldRedrawWhenRefreshStarts(settings: WidgetSettings): Boolean = settings.news.isEmpty()
+
+internal fun shouldRedrawWhenWeatherRefreshStarts(settings: WidgetSettings): Boolean {
+    return settings.weatherCode == null || settings.temperatureCelsius == null
+}
+
+internal suspend fun finishRefreshAndRedraw(
+    finishRefresh: suspend () -> Unit,
+    readSettings: suspend () -> WidgetSettings,
+    clearRefreshState: suspend () -> Unit,
+    redrawWidgets: suspend () -> Boolean,
+    logState: (String, WidgetSettings) -> Unit = { _, _ -> },
+    logFailure: (String, Throwable) -> Unit = { _, _ -> },
+    logWarning: (String) -> Unit = {},
+): Boolean {
+    finishRefresh()
+    var afterFinish = runCatching { readSettings() }
+        .onSuccess { logState("after finish", it) }
+        .onFailure { logFailure("Failed to verify refresh state after finish", it) }
+        .getOrNull()
+
+    if (afterFinish?.needsRefreshStateCleanupAfterFinish() == true) {
+        logWarning("Refresh flags remained after finish. Clearing again.")
+        val clearSucceeded = runCatching { clearRefreshState() }
+            .onFailure { logFailure("Failed to force-clear refresh state", it) }
+            .isSuccess
+        if (clearSucceeded) {
+            afterFinish = runCatching { readSettings() }
+                .onSuccess { logState("after forced clear", it) }
+                .onFailure { logFailure("Failed to verify forced refresh-state clear", it) }
+                .getOrNull()
+        }
+    }
+
+    if (
+        afterFinish != null &&
+        (afterFinish.lastRefreshFinishedAtMillis <= 0L || afterFinish.lastRefreshResult == null)
+    ) {
+        logWarning("Refresh completion metadata is missing after finish.")
+    }
+    return redrawWidgets()
 }
 
 internal data class WeatherTarget(
