@@ -1,6 +1,8 @@
 package com.tksapec.ywidget.data
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -19,6 +21,25 @@ class RefreshPolicyTest {
         assertFalse(isTimestampFresh(now - 60_001L, now, 60_000L))
         assertFalse(isTimestampFresh(now + 1L, now, 60_000L))
         assertFalse(isTimestampFresh(0L, now, 60_000L))
+    }
+
+    @Test
+    fun freshLocationTimestampKeepsActualMeasurementTime() {
+        assertEquals(
+            1_950_000L,
+            freshLocationTimestampOrNull(
+                locationTimestampMillis = 1_950_000L,
+                nowMillis = 2_000_000L,
+                maxAgeMillis = 60_000L,
+            ),
+        )
+        assertNull(
+            freshLocationTimestampOrNull(
+                locationTimestampMillis = 1_900_000L,
+                nowMillis = 2_000_000L,
+                maxAgeMillis = 60_000L,
+            ),
+        )
     }
 
     @Test
