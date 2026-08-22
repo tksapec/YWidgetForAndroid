@@ -4,6 +4,7 @@ import java.net.URI
 
 internal const val CURRENT_LOCATION_CACHE_MAX_AGE_MILLIS: Long = 30 * 60 * 1_000L
 internal const val REFRESH_GENERATION_INPUT_KEY: String = "refresh_generation"
+internal const val MAX_REFRESH_ATTEMPTS: Int = 3
 
 internal fun refreshGenerationMatches(currentGeneration: Long, expectedGeneration: Long): Boolean {
     return currentGeneration == expectedGeneration
@@ -27,6 +28,15 @@ internal fun freshLocationTimestampOrNull(
 
 internal fun isRetryableHttpStatus(statusCode: Int): Boolean {
     return statusCode == 408 || statusCode == 429 || statusCode in 500..599
+}
+
+internal fun shouldRetryTransientFailure(
+    retryNeeded: Boolean,
+    runAttemptCount: Int,
+    maxAttempts: Int = MAX_REFRESH_ATTEMPTS,
+): Boolean {
+    if (!retryNeeded || maxAttempts <= 1) return false
+    return runAttemptCount < maxAttempts - 1
 }
 
 internal fun isAllowedExternalUrl(url: String): Boolean {
