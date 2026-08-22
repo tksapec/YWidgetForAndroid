@@ -53,6 +53,14 @@ class RefreshPolicyTest {
     }
 
     @Test
+    fun transientRetryStopsAfterThreeTotalAttempts() {
+        assertTrue(shouldRetryTransientFailure(true, runAttemptCount = 0, maxAttempts = 3))
+        assertTrue(shouldRetryTransientFailure(true, runAttemptCount = 1, maxAttempts = 3))
+        assertFalse(shouldRetryTransientFailure(true, runAttemptCount = 2, maxAttempts = 3))
+        assertFalse(shouldRetryTransientFailure(false, runAttemptCount = 0, maxAttempts = 3))
+    }
+
+    @Test
     fun externalUrlRequiresHttpsAndHost() {
         assertTrue(isAllowedExternalUrl("https://news.yahoo.co.jp/a"))
         assertFalse(isAllowedExternalUrl("http://news.yahoo.co.jp/a"))
