@@ -90,6 +90,7 @@ class RefreshWorkerPolicyTest {
         val result = finishRefreshAndRedraw(
             finishRefresh = { calls += "finish"; true },
             readSettings = { calls += "read"; finishedState },
+            clearRefreshState = { calls += "clear" },
             redrawWidgets = { calls += "redraw"; true },
         )
 
@@ -104,6 +105,7 @@ class RefreshWorkerPolicyTest {
         val result = finishRefreshAndRedraw(
             finishRefresh = { calls += "finish"; false },
             readSettings = { calls += "read"; WidgetSettings() },
+            clearRefreshState = { calls += "clear" },
             redrawWidgets = { calls += "redraw"; true },
         )
 
@@ -118,6 +120,7 @@ class RefreshWorkerPolicyTest {
         val result = finishRefreshAndRedraw(
             finishRefresh = { calls += "finish"; true },
             readSettings = { calls += "read"; error("read failed") },
+            clearRefreshState = { calls += "clear" },
             redrawWidgets = { calls += "redraw"; true },
         )
 
