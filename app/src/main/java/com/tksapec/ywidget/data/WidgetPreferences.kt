@@ -52,6 +52,7 @@ class WidgetPreferences internal constructor(private val dataStore: DataStore<Pr
             newsRefreshing = preferences[Keys.newsRefreshing] ?: false,
             refreshQueued = preferences[Keys.refreshQueued] ?: false,
             refreshStartedAtMillis = preferences[Keys.refreshStartedAtMillis] ?: 0L,
+            refreshGeneration = preferences[Keys.refreshGeneration] ?: 0L,
             weatherEnabled = preferences[Keys.weatherEnabled] ?: false,
             weatherLocationMode = WeatherLocationMode.fromName(
                 preferences[Keys.weatherLocationMode] ?: WeatherLocationMode.Disabled.name,
@@ -75,6 +76,7 @@ class WidgetPreferences internal constructor(private val dataStore: DataStore<Pr
             lastCurrentLatitude = preferences[Keys.lastCurrentLatitude],
             lastCurrentLongitude = preferences[Keys.lastCurrentLongitude],
             lastCurrentLocationLabel = preferences[Keys.lastCurrentLocationLabel],
+            lastCurrentLocationAtMillis = preferences[Keys.lastCurrentLocationAtMillis] ?: 0L,
             launcherAppSlots = launcherAppSlots,
         )
     }
@@ -87,9 +89,15 @@ class WidgetPreferences internal constructor(private val dataStore: DataStore<Pr
 
     suspend fun updateSelectedCategories(categories: Set<NewsCategory>) {
         val safeCategories = orderedCategories(categories).ifEmpty { listOf(NewsCategory.Top) }
+        val encoded = safeCategories.joinToString(",") { category -> category.name }
         dataStore.edit {
-            it[Keys.selectedCategories] = safeCategories.joinToString(",") { category -> category.name }
+            val changed = it[Keys.selectedCategories] != encoded
+            it[Keys.selectedCategories] = encoded
             it[Keys.category] = safeCategories.first().name
+            if (changed) {
+                invalidateRefreshGeneration(it)
+                clearNewsCache(it)
+            }
         }
     }
 
@@ -111,8 +119,13 @@ class WidgetPreferences internal constructor(private val dataStore: DataStore<Pr
 
     suspend fun updateWeatherLocationMode(mode: WeatherLocationMode) {
         dataStore.edit {
+            val changed = it[Keys.weatherLocationMode] != mode.name
             it[Keys.weatherLocationMode] = mode.name
             it[Keys.weatherEnabled] = mode != WeatherLocationMode.Disabled
+            if (changed) {
+                invalidateRefreshGeneration(it)
+                clearWeatherCache(it)
+            }
             if (mode == WeatherLocationMode.Disabled) {
                 it.remove(Keys.lastWeatherError)
             }
@@ -120,15 +133,28 @@ class WidgetPreferences internal constructor(private val dataStore: DataStore<Pr
     }
 
     suspend fun updateFixedLocationQuery(query: String) {
+        val normalized = query.trim()
         dataStore.edit {
-            it[Keys.fixedLocationQuery] = query.trim()
+            val changed = it[Keys.fixedLocationQuery].orEmpty() != normalized
+            it[Keys.fixedLocationQuery] = normalized
             it.remove(Keys.fixedLatitude)
             it.remove(Keys.fixedLongitude)
+            if (changed) {
+                invalidateRefreshGeneration(it)
+                clearWeatherCache(it)
+            }
         }
     }
 
-    suspend fun saveFixedLocation(query: String, latitude: Double, longitude: Double, label: String) {
+    suspend fun saveFixedLocation(
+        query: String,
+        latitude: Double,
+        longitude: Double,
+        label: String,
+        expectedGeneration: Long? = null,
+    ) {
         dataStore.edit {
+            if (!generationMatches(it, expectedGeneration)) return@edit
             it[Keys.fixedLocationQuery] = query.trim()
             it[Keys.fixedLatitude] = latitude
             it[Keys.fixedLongitude] = longitude
@@ -139,8 +165,14 @@ class WidgetPreferences internal constructor(private val dataStore: DataStore<Pr
         }
     }
 
-    suspend fun saveNews(news: List<NewsItem>, updatedAtMillis: Long, warningMessage: String? = null) {
+    suspend fun saveNews(
+        news: List<NewsItem>,
+        updatedAtMillis: Long,
+        warningMessage: String? = null,
+        expectedGeneration: Long? = null,
+    ) {
         dataStore.edit {
+            if (!generationMatches(it, expectedGeneration)) return@edit
             it[Keys.newsJson] = json.encodeToString(news)
             it[Keys.newsUpdatedAtMillis] = updatedAtMillis
             it[Keys.newsRefreshing] = false
@@ -152,63 +184,93 @@ class WidgetPreferences internal constructor(private val dataStore: DataStore<Pr
         }
     }
 
-    suspend fun saveNewsError(message: String) {
+    suspend fun saveNewsError(message: String, expectedGeneration: Long? = null) {
         dataStore.edit {
+            if (!generationMatches(it, expectedGeneration)) return@edit
             it[Keys.lastNewsError] = message
             it[Keys.newsRefreshing] = false
         }
     }
 
-    suspend fun updateNewsRefreshing(refreshing: Boolean) {
+    suspend fun updateNewsRefreshing(refreshing: Boolean, expectedGeneration: Long? = null) {
         dataStore.edit {
+            if (!generationMatches(it, expectedGeneration)) return@edit
             it[Keys.newsRefreshing] = refreshing
-            if (refreshing) {
-                it[Keys.refreshQueued] = false
-                it[Keys.refreshStartedAtMillis] = System.currentTimeMillis()
-            }
+            if (refreshing) it[Keys.refreshQueued] = false
         }
     }
 
-    suspend fun updateRefreshQueued(queued: Boolean) {
+    suspend fun updateRefreshQueued(queued: Boolean): Long {
+        var generation = 0L
         dataStore.edit {
+            generation = it[Keys.refreshGeneration] ?: 0L
             it[Keys.refreshQueued] = queued
             if (queued) {
-                val now = System.currentTimeMillis()
-                it[Keys.refreshStartedAtMillis] = now
-                it[Keys.lastRefreshStartedAtMillis] = now
+                generation = nextGeneration(generation)
+                it[Keys.refreshGeneration] = generation
+                it[Keys.newsRefreshing] = false
+                it[Keys.weatherRefreshing] = false
+                it[Keys.refreshStartedAtMillis] = 0L
                 it.remove(Keys.lastRefreshFinishedAtMillis)
                 it.remove(Keys.lastRefreshResult)
                 it[Keys.lastRefreshMessage] = "更新予約中"
             }
         }
+        return generation
     }
 
-    suspend fun markRefreshRunning(startedAtMillis: Long = System.currentTimeMillis()) {
+    suspend fun markRefreshRunning(
+        expectedGeneration: Long,
+        startedAtMillis: Long = System.currentTimeMillis(),
+    ): Boolean {
+        var started = false
         dataStore.edit {
+            if (!generationMatches(it, expectedGeneration)) return@edit
+            started = true
             it[Keys.refreshQueued] = false
             it[Keys.newsRefreshing] = true
+            it[Keys.weatherRefreshing] = false
             it[Keys.refreshStartedAtMillis] = startedAtMillis
             it[Keys.lastRefreshStartedAtMillis] = startedAtMillis
             it.remove(Keys.lastRefreshFinishedAtMillis)
             it.remove(Keys.lastRefreshResult)
             it[Keys.lastRefreshMessage] = "更新中"
         }
+        return started
     }
 
-    suspend fun finishRefresh(result: RefreshResult, message: String, finishedAtMillis: Long = System.currentTimeMillis()) {
+    suspend fun finishRefresh(
+        result: RefreshResult,
+        message: String,
+        finishedAtMillis: Long = System.currentTimeMillis(),
+    ) {
+        dataStore.edit { finishRefreshEdit(it, result, message, finishedAtMillis) }
+    }
+
+    suspend fun finishRefreshIfGeneration(
+        expectedGeneration: Long,
+        result: RefreshResult,
+        message: String,
+        finishedAtMillis: Long = System.currentTimeMillis(),
+    ): Boolean {
+        var finished = false
         dataStore.edit {
-            it[Keys.refreshQueued] = false
-            it[Keys.newsRefreshing] = false
-            it[Keys.weatherRefreshing] = false
-            it[Keys.refreshStartedAtMillis] = 0L
-            it[Keys.lastRefreshFinishedAtMillis] = finishedAtMillis
-            it[Keys.lastRefreshResult] = result.name
-            it[Keys.lastRefreshMessage] = message
+            if (!generationMatches(it, expectedGeneration)) return@edit
+            finished = true
+            finishRefreshEdit(it, result, message, finishedAtMillis)
         }
+        return finished
     }
 
     suspend fun markRefreshStale(message: String = "前回更新が中断されました") {
         finishRefresh(RefreshResult.Stale, message)
+    }
+
+    suspend fun markRefreshStaleIfGeneration(
+        expectedGeneration: Long,
+        message: String = "前回更新が中断されました",
+    ): Boolean {
+        return finishRefreshIfGeneration(expectedGeneration, RefreshResult.Stale, message)
     }
 
     suspend fun saveWidgetUpdateSuccess(updatedAtMillis: Long = System.currentTimeMillis()) {
@@ -222,10 +284,18 @@ class WidgetPreferences internal constructor(private val dataStore: DataStore<Pr
         dataStore.edit { it[Keys.lastWidgetUpdateError] = message }
     }
 
-    suspend fun saveCurrentLocation(latitude: Double, longitude: Double, label: String?) {
+    suspend fun saveCurrentLocation(
+        latitude: Double,
+        longitude: Double,
+        label: String?,
+        locationAtMillis: Long = System.currentTimeMillis(),
+        expectedGeneration: Long? = null,
+    ) {
         dataStore.edit {
+            if (!generationMatches(it, expectedGeneration)) return@edit
             it[Keys.lastCurrentLatitude] = latitude
             it[Keys.lastCurrentLongitude] = longitude
+            it[Keys.lastCurrentLocationAtMillis] = locationAtMillis
             if (label.isNullOrBlank()) {
                 it.remove(Keys.lastCurrentLocationLabel)
             } else {
@@ -239,31 +309,36 @@ class WidgetPreferences internal constructor(private val dataStore: DataStore<Pr
         temperatureCelsius: Double,
         locationLabel: String?,
         updatedAtMillis: Long,
+        expectedGeneration: Long? = null,
     ) {
         dataStore.edit {
+            if (!generationMatches(it, expectedGeneration)) return@edit
             it[Keys.weatherCode] = code
             it[Keys.temperatureCelsius] = temperatureCelsius
-            locationLabel?.let { label -> it[Keys.locationLabel] = label }
+            if (locationLabel.isNullOrBlank()) {
+                it.remove(Keys.locationLabel)
+            } else {
+                it[Keys.locationLabel] = locationLabel
+            }
             it[Keys.weatherUpdatedAtMillis] = updatedAtMillis
             it[Keys.weatherRefreshing] = false
             it.remove(Keys.lastWeatherError)
         }
     }
 
-    suspend fun saveWeatherError(message: String) {
+    suspend fun saveWeatherError(message: String, expectedGeneration: Long? = null) {
         dataStore.edit {
+            if (!generationMatches(it, expectedGeneration)) return@edit
             it[Keys.lastWeatherError] = message
             it[Keys.weatherRefreshing] = false
         }
     }
 
-    suspend fun updateWeatherRefreshing(refreshing: Boolean) {
+    suspend fun updateWeatherRefreshing(refreshing: Boolean, expectedGeneration: Long? = null) {
         dataStore.edit {
+            if (!generationMatches(it, expectedGeneration)) return@edit
             it[Keys.weatherRefreshing] = refreshing
-            if (refreshing) {
-                it[Keys.refreshQueued] = false
-                it[Keys.refreshStartedAtMillis] = System.currentTimeMillis()
-            }
+            if (refreshing) it[Keys.refreshQueued] = false
         }
     }
 
@@ -326,6 +401,56 @@ class WidgetPreferences internal constructor(private val dataStore: DataStore<Pr
         )
     }
 
+    private fun generationMatches(preferences: Preferences, expectedGeneration: Long?): Boolean {
+        if (expectedGeneration == null) return true
+        return refreshGenerationMatches(
+            currentGeneration = preferences[Keys.refreshGeneration] ?: 0L,
+            expectedGeneration = expectedGeneration,
+        )
+    }
+
+    private fun invalidateRefreshGeneration(preferences: androidx.datastore.preferences.core.MutablePreferences) {
+        val next = nextGeneration(preferences[Keys.refreshGeneration] ?: 0L)
+        preferences[Keys.refreshGeneration] = next
+        preferences[Keys.refreshQueued] = false
+        preferences[Keys.newsRefreshing] = false
+        preferences[Keys.weatherRefreshing] = false
+        preferences[Keys.refreshStartedAtMillis] = 0L
+    }
+
+    private fun clearNewsCache(preferences: androidx.datastore.preferences.core.MutablePreferences) {
+        preferences.remove(Keys.newsJson)
+        preferences.remove(Keys.newsUpdatedAtMillis)
+        preferences.remove(Keys.lastNewsError)
+    }
+
+    private fun clearWeatherCache(preferences: androidx.datastore.preferences.core.MutablePreferences) {
+        preferences.remove(Keys.weatherCode)
+        preferences.remove(Keys.temperatureCelsius)
+        preferences.remove(Keys.weatherUpdatedAtMillis)
+        preferences.remove(Keys.locationLabel)
+        preferences.remove(Keys.lastWeatherError)
+    }
+
+    private fun finishRefreshEdit(
+        preferences: androidx.datastore.preferences.core.MutablePreferences,
+        result: RefreshResult,
+        message: String,
+        finishedAtMillis: Long,
+    ) {
+        preferences[Keys.refreshQueued] = false
+        preferences[Keys.newsRefreshing] = false
+        preferences[Keys.weatherRefreshing] = false
+        preferences[Keys.refreshStartedAtMillis] = 0L
+        preferences[Keys.lastRefreshFinishedAtMillis] = finishedAtMillis
+        preferences[Keys.lastRefreshResult] = result.name
+        preferences[Keys.lastRefreshMessage] = message
+    }
+
+    private fun nextGeneration(current: Long): Long {
+        return if (current == Long.MAX_VALUE) 1L else current + 1L
+    }
+
     private object Keys {
         val category = stringPreferencesKey("category")
         val selectedCategories = stringPreferencesKey("selected_categories")
@@ -337,6 +462,7 @@ class WidgetPreferences internal constructor(private val dataStore: DataStore<Pr
         val newsRefreshing = booleanPreferencesKey("news_refreshing")
         val refreshQueued = booleanPreferencesKey("refresh_queued")
         val refreshStartedAtMillis = longPreferencesKey("refresh_started_at_millis")
+        val refreshGeneration = longPreferencesKey("refresh_generation")
         val weatherEnabled = booleanPreferencesKey("weather_enabled")
         val weatherLocationMode = stringPreferencesKey("weather_location_mode")
         val locationLabel = stringPreferencesKey("location_label")
@@ -358,6 +484,7 @@ class WidgetPreferences internal constructor(private val dataStore: DataStore<Pr
         val lastCurrentLatitude = doublePreferencesKey("last_current_latitude")
         val lastCurrentLongitude = doublePreferencesKey("last_current_longitude")
         val lastCurrentLocationLabel = stringPreferencesKey("last_current_location_label")
+        val lastCurrentLocationAtMillis = longPreferencesKey("last_current_location_at_millis")
         val launcherAppSlotsJson = stringPreferencesKey("launcher_app_slots_json")
         val launcherAppsJson = stringPreferencesKey("launcher_apps_json")
     }
