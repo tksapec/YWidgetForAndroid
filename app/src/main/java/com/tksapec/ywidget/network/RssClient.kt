@@ -65,7 +65,7 @@ class RssClient(
                 parser.next()
             }
             return items
-        } catch (error: Throwable) {
+        } catch (error: Exception) {
             if (error is RssException) throw error
             throw RssParseException(error)
         }
