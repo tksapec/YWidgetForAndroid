@@ -19,6 +19,7 @@ data class WidgetSettings(
     val newsRefreshing: Boolean = false,
     val refreshQueued: Boolean = false,
     val refreshStartedAtMillis: Long = 0L,
+    val refreshGeneration: Long = 0L,
     val weatherEnabled: Boolean = false,
     val weatherLocationMode: WeatherLocationMode = WeatherLocationMode.Disabled,
     val locationLabel: String? = null,
@@ -40,6 +41,7 @@ data class WidgetSettings(
     val lastCurrentLatitude: Double? = null,
     val lastCurrentLongitude: Double? = null,
     val lastCurrentLocationLabel: String? = null,
+    val lastCurrentLocationAtMillis: Long = 0L,
     val launcherAppSlots: List<LauncherAppSlot> = emptyLauncherAppSlots(),
 )
 
@@ -145,8 +147,8 @@ fun WidgetSettings.isWeatherRefreshingActive(now: Long): Boolean {
     return weatherRefreshing && isRefreshStateActive(now)
 }
 
-fun WidgetSettings.isRefreshQueuedActive(now: Long): Boolean {
-    return refreshQueued && isRefreshStateActive(now)
+fun WidgetSettings.isRefreshQueuedActive(@Suppress("UNUSED_PARAMETER") now: Long): Boolean {
+    return refreshQueued
 }
 
 fun WidgetSettings.shouldCleanupStaleRefreshState(now: Long): Boolean {
@@ -154,13 +156,13 @@ fun WidgetSettings.shouldCleanupStaleRefreshState(now: Long): Boolean {
 }
 
 fun WidgetSettings.hasStaleRefreshState(now: Long): Boolean {
-    return hasRefreshState() &&
+    return hasRunningRefreshState() &&
         !hasCompletedRefreshAfterCurrentStart() &&
         !isRefreshStateWithinTimeout(now)
 }
 
-private fun WidgetSettings.hasRefreshState(): Boolean {
-    return refreshQueued || newsRefreshing || weatherRefreshing
+private fun WidgetSettings.hasRunningRefreshState(): Boolean {
+    return newsRefreshing || weatherRefreshing
 }
 
 private fun WidgetSettings.isRefreshStateActive(now: Long): Boolean {
@@ -169,6 +171,7 @@ private fun WidgetSettings.isRefreshStateActive(now: Long): Boolean {
 
 private fun WidgetSettings.isRefreshStateWithinTimeout(now: Long): Boolean {
     return refreshStartedAtMillis > 0L &&
+        now >= refreshStartedAtMillis &&
         now - refreshStartedAtMillis < REFRESH_ACTIVE_TIMEOUT_MILLIS
 }
 
@@ -183,11 +186,22 @@ internal fun WidgetSettings.needsRefreshStateCleanupAfterFinish(): Boolean {
     return newsRefreshing || weatherRefreshing || refreshQueued || refreshStartedAtMillis != 0L
 }
 
+internal fun WidgetSettings.hasFreshCachedCurrentLocation(now: Long): Boolean {
+    return lastCurrentLatitude != null &&
+        lastCurrentLongitude != null &&
+        isTimestampFresh(
+            timestampMillis = lastCurrentLocationAtMillis,
+            nowMillis = now,
+            maxAgeMillis = CURRENT_LOCATION_CACHE_MAX_AGE_MILLIS,
+        )
+}
+
 internal fun WidgetSettings.refreshDiagnosticSummary(): String {
     return "newsRefreshing=$newsRefreshing, " +
         "weatherRefreshing=$weatherRefreshing, " +
         "refreshQueued=$refreshQueued, " +
         "refreshStartedAt=$refreshStartedAtMillis, " +
+        "refreshGeneration=$refreshGeneration, " +
         "lastRefreshFinishedAt=$lastRefreshFinishedAtMillis, " +
         "lastRefreshResult=$lastRefreshResult, " +
         "lastRefreshMessage=$lastRefreshMessage, " +
@@ -196,6 +210,7 @@ internal fun WidgetSettings.refreshDiagnosticSummary(): String {
         "newsSize=${news.size}, " +
         "weatherCode=$weatherCode, " +
         "temperature=$temperatureCelsius, " +
+        "lastCurrentLocationAt=$lastCurrentLocationAtMillis, " +
         "lastNewsError=$lastNewsError, " +
         "lastWeatherError=$lastWeatherError, " +
         "lastWidgetUpdatedAt=$lastWidgetUpdatedAtMillis, " +
