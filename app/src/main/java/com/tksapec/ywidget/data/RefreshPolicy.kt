@@ -15,6 +15,16 @@ internal fun isTimestampFresh(timestampMillis: Long, nowMillis: Long, maxAgeMill
     return nowMillis - timestampMillis <= maxAgeMillis
 }
 
+internal fun freshLocationTimestampOrNull(
+    locationTimestampMillis: Long,
+    nowMillis: Long,
+    maxAgeMillis: Long = CURRENT_LOCATION_CACHE_MAX_AGE_MILLIS,
+): Long? {
+    return locationTimestampMillis.takeIf {
+        isTimestampFresh(it, nowMillis, maxAgeMillis)
+    }
+}
+
 internal fun isRetryableHttpStatus(statusCode: Int): Boolean {
     return statusCode == 408 || statusCode == 429 || statusCode in 500..599
 }
