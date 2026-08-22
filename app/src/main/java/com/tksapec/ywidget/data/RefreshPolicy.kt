@@ -3,6 +3,7 @@ package com.tksapec.ywidget.data
 import java.net.URI
 
 internal const val CURRENT_LOCATION_CACHE_MAX_AGE_MILLIS: Long = 30 * 60 * 1_000L
+internal const val REFRESH_GENERATION_INPUT_KEY: String = "refresh_generation"
 
 internal fun refreshGenerationMatches(currentGeneration: Long, expectedGeneration: Long): Boolean {
     return currentGeneration == expectedGeneration
