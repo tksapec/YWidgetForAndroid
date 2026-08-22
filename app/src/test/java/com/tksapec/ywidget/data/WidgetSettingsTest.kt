@@ -160,33 +160,11 @@ class WidgetSettingsTest {
     }
 
     @Test
-    fun activeRefreshQueueIsTrueWithinTimeout() {
-        val settings = WidgetSettings(
-            refreshQueued = true,
-            refreshStartedAtMillis = 1_000L,
-        )
+    fun queuedRefreshRemainsActiveWhileWorkManagerWaits() {
+        val settings = WidgetSettings(refreshQueued = true)
 
-        assertTrue(settings.isRefreshQueuedActive(now = 1_000L + REFRESH_ACTIVE_TIMEOUT_MILLIS - 1L))
-    }
-
-    @Test
-    fun activeRefreshQueueIsFalseAfterTimeout() {
-        val settings = WidgetSettings(
-            refreshQueued = true,
-            refreshStartedAtMillis = 1_000L,
-        )
-
-        assertFalse(settings.isRefreshQueuedActive(now = 1_000L + REFRESH_ACTIVE_TIMEOUT_MILLIS))
-    }
-
-    @Test
-    fun cleanupStaleRefreshStateIsTrueForExpiredQueue() {
-        val settings = WidgetSettings(
-            refreshQueued = true,
-            refreshStartedAtMillis = 1_000L,
-        )
-
-        assertTrue(settings.shouldCleanupStaleRefreshState(now = 1_000L + REFRESH_ACTIVE_TIMEOUT_MILLIS))
+        assertTrue(settings.isRefreshQueuedActive(now = REFRESH_ACTIVE_TIMEOUT_MILLIS + 60_000L))
+        assertFalse(settings.shouldCleanupStaleRefreshState(now = REFRESH_ACTIVE_TIMEOUT_MILLIS + 60_000L))
     }
 
     @Test
@@ -210,9 +188,9 @@ class WidgetSettingsTest {
     }
 
     @Test
-    fun cleanupStaleRefreshStateIsFalseForActiveQueue() {
+    fun cleanupStaleRefreshStateIsFalseForActiveRunningRefresh() {
         val settings = WidgetSettings(
-            refreshQueued = true,
+            newsRefreshing = true,
             refreshStartedAtMillis = 1_000L,
         )
 
@@ -220,7 +198,7 @@ class WidgetSettingsTest {
     }
 
     @Test
-    fun cleanupStaleRefreshStateIsFalseWhenNoStateIsSet() {
+    fun cleanupStaleRefreshStateIsFalseWhenNoRunningStateIsSet() {
         val settings = WidgetSettings(
             refreshQueued = false,
             refreshStartedAtMillis = 1_000L,
