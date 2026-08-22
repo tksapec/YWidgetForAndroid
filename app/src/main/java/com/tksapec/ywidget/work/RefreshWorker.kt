@@ -229,7 +229,13 @@ class RefreshWorker(
                             )
                         },
                         readSettings = { preferences.currentSettings() },
-                        clearRefreshState = { preferences.clearRefreshState() },
+                        clearRefreshState = {
+                            preferences.finishRefreshIfGeneration(
+                                expectedGeneration = expectedGeneration,
+                                result = finalRefreshResult,
+                                message = finalRefreshMessage,
+                            )
+                        },
                         redrawWidgets = {
                             redrawAllWidgetsAfterRefreshFinished(applicationContext)
                         },
