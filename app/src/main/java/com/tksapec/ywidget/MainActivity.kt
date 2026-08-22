@@ -48,17 +48,16 @@ import com.tksapec.ywidget.data.DisplayStyle
 import com.tksapec.ywidget.data.LauncherAppSlot
 import com.tksapec.ywidget.data.LauncherAppShortcut
 import com.tksapec.ywidget.data.NewsCategory
-import com.tksapec.ywidget.data.RefreshResult
 import com.tksapec.ywidget.data.WeatherLocationMode
 import com.tksapec.ywidget.data.WidgetPreferences
 import com.tksapec.ywidget.data.WidgetSettings
 import com.tksapec.ywidget.widget.YWidgetReceiver
 import com.tksapec.ywidget.widget.safeUpdateAll
-import com.tksapec.ywidget.work.RefreshStateCleanupWorker
 import com.tksapec.ywidget.work.RefreshWorker
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -147,12 +146,11 @@ class MainActivity : ComponentActivity() {
 
     private suspend fun enqueueImmediateRefresh() {
         try {
-            preferences.updateRefreshQueued(true)
-            RefreshStateCleanupWorker.enqueue(this)
-            safeUpdateAll(this)
             RefreshWorker.enqueueImmediateByUser(this)
-        } catch (_: Throwable) {
-            preferences.finishRefresh(RefreshResult.Failed, "更新予約失敗")
+            safeUpdateAll(this)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
             safeUpdateAll(this)
         }
     }
@@ -332,11 +330,13 @@ private fun RefreshDiagnostics(settings: WidgetSettings) {
         "最終天気取得" to formatDiagnosticTime(settings.weatherUpdatedAtMillis),
         "最終更新開始" to formatDiagnosticTime(settings.lastRefreshStartedAtMillis),
         "最終更新終了" to formatDiagnosticTime(settings.lastRefreshFinishedAtMillis),
+        "更新世代" to settings.refreshGeneration.toString(),
         "現在状態" to "queued=${settings.refreshQueued}, news=${settings.newsRefreshing}, weather=${settings.weatherRefreshing}",
         "最終結果" to (settings.lastRefreshResult?.label ?: "未実行"),
         "結果メッセージ" to settings.lastRefreshMessage.orEmpty().ifBlank { "なし" },
         "ニュースエラー" to settings.lastNewsError.orEmpty().ifBlank { "なし" },
         "天気エラー" to settings.lastWeatherError.orEmpty().ifBlank { "なし" },
+        "最終現在地" to formatDiagnosticTime(settings.lastCurrentLocationAtMillis),
         "最終ウィジェット反映" to formatDiagnosticTime(settings.lastWidgetUpdatedAtMillis),
         "ウィジェット反映エラー" to settings.lastWidgetUpdateError.orEmpty().ifBlank { "なし" },
     )
