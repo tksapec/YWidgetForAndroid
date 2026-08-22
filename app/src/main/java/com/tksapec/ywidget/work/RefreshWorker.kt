@@ -20,6 +20,7 @@ import androidx.work.OutOfQuotaPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import androidx.work.await
 import androidx.work.workDataOf
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
@@ -482,25 +483,30 @@ class RefreshWorker(
         private const val NEWS_CATEGORY_TIMEOUT_MILLIS = 12_000L
         private const val NEWS_TOTAL_TIMEOUT_MILLIS = 20_000L
         private const val INVALID_GENERATION = -1L
+        private val enqueueCoordinator = RefreshEnqueueCoordinator()
 
         suspend fun enqueueImmediateByUser(context: Context) {
-            val preferences = WidgetPreferences(context)
-            val refreshGeneration = preferences.updateRefreshQueued(true)
-            try {
-                enqueueImmediate(context, userEnqueuePolicy(), refreshGeneration)
-            } catch (error: Exception) {
-                preferences.finishRefreshIfGeneration(
-                    expectedGeneration = refreshGeneration,
-                    result = RefreshResult.Failed,
-                    message = "更新予約失敗",
-                )
-                throw error
+            enqueueCoordinator.runSerialized {
+                val preferences = WidgetPreferences(context)
+                val refreshGeneration = preferences.updateRefreshQueued(true)
+                try {
+                    enqueueImmediate(context, userEnqueuePolicy(), refreshGeneration)
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Exception) {
+                    preferences.finishRefreshIfGeneration(
+                        expectedGeneration = refreshGeneration,
+                        result = RefreshResult.Failed,
+                        message = "更新予約失敗",
+                    )
+                    throw error
+                }
             }
         }
 
         internal fun userEnqueuePolicy(): ExistingWorkPolicy = ExistingWorkPolicy.REPLACE
 
-        private fun enqueueImmediate(
+        private suspend fun enqueueImmediate(
             context: Context,
             existingWorkPolicy: ExistingWorkPolicy,
             refreshGeneration: Long,
@@ -515,21 +521,23 @@ class RefreshWorker(
                 UNIQUE_REFRESH_WORK,
                 existingWorkPolicy,
                 request,
-            )
+            ).await()
         }
 
         suspend fun enqueueImmediateIfDueFromSettings(context: Context) {
-            val preferences = WidgetPreferences(context)
-            val settings = preferences.currentSettings()
-            val now = System.currentTimeMillis()
-            if (settings.isRefreshDue(now)) {
-                val policy = periodicEnqueuePolicy(settings, now)
-                val refreshGeneration = if (policy == ExistingWorkPolicy.REPLACE) {
-                    preferences.updateRefreshQueued(true)
-                } else {
-                    settings.refreshGeneration
+            enqueueCoordinator.runSerialized {
+                val preferences = WidgetPreferences(context)
+                val settings = preferences.currentSettings()
+                val now = System.currentTimeMillis()
+                if (settings.isRefreshDue(now)) {
+                    val policy = periodicEnqueuePolicy(settings, now)
+                    val refreshGeneration = if (policy == ExistingWorkPolicy.REPLACE) {
+                        preferences.updateRefreshQueued(true)
+                    } else {
+                        settings.refreshGeneration
+                    }
+                    enqueueImmediate(context, policy, refreshGeneration)
                 }
-                enqueueImmediate(context, policy, refreshGeneration)
             }
         }
 
