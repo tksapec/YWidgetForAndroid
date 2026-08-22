@@ -19,18 +19,18 @@ class WidgetDisplayStateTest {
 
     @Test
     fun activeQueueShowsQueued() {
-        val settings = WidgetSettings(refreshQueued = true, refreshStartedAtMillis = 1_000L)
+        val settings = WidgetSettings(refreshQueued = true)
 
         assertEquals("更新予約中...", statusText(settings, now = 2_000L))
     }
 
     @Test
-    fun staleQueueDoesNotShowQueued() {
-        val settings = WidgetSettings(refreshQueued = true, refreshStartedAtMillis = 1_000L)
+    fun queuedWorkRemainsQueuedWhileConstraintsDelayExecution() {
+        val settings = WidgetSettings(refreshQueued = true)
 
         assertEquals(
-            "前回更新が中断されました",
-            statusText(settings, now = 1_000L + REFRESH_ACTIVE_TIMEOUT_MILLIS),
+            "更新予約中...",
+            statusText(settings, now = REFRESH_ACTIVE_TIMEOUT_MILLIS + 60_000L),
         )
     }
 
