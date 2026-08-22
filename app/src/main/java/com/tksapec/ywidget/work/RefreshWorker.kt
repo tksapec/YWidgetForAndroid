@@ -9,6 +9,7 @@ import android.location.Geocoder
 import android.os.Build
 import android.util.Log
 import androidx.core.content.ContextCompat
+import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
@@ -17,47 +18,54 @@ import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.OutOfQuotaPolicy
 import androidx.work.PeriodicWorkRequestBuilder
-import androidx.work.BackoffPolicy
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
-import com.tksapec.ywidget.data.PARTIAL_NEWS_ERROR_MESSAGE
+import androidx.work.workDataOf
+import com.google.android.gms.location.LocationServices
+import com.google.android.gms.location.Priority
+import com.google.android.gms.tasks.CancellationTokenSource
+import com.tksapec.ywidget.data.CURRENT_LOCATION_CACHE_MAX_AGE_MILLIS
+import com.tksapec.ywidget.data.CURRENT_LOCATION_UNAVAILABLE_MESSAGE
 import com.tksapec.ywidget.data.LOCATION_PERMISSION_DENIED_MESSAGE
 import com.tksapec.ywidget.data.NewsItem
+import com.tksapec.ywidget.data.PARTIAL_NEWS_ERROR_MESSAGE
+import com.tksapec.ywidget.data.REFRESH_GENERATION_INPUT_KEY
 import com.tksapec.ywidget.data.RefreshResult
 import com.tksapec.ywidget.data.WeatherLocationMode
 import com.tksapec.ywidget.data.WidgetPreferences
 import com.tksapec.ywidget.data.WidgetSettings
-import com.tksapec.ywidget.data.CURRENT_LOCATION_UNAVAILABLE_MESSAGE
-import com.tksapec.ywidget.data.isRefreshDue
-import com.tksapec.ywidget.data.hasStaleRefreshState
-import com.tksapec.ywidget.data.summarizeNewsFetchResults
 import com.tksapec.ywidget.data.classifyNewsRefresh
+import com.tksapec.ywidget.data.hasFreshCachedCurrentLocation
+import com.tksapec.ywidget.data.hasStaleRefreshState
+import com.tksapec.ywidget.data.isRefreshDue
+import com.tksapec.ywidget.data.isRetryableHttpStatus
+import com.tksapec.ywidget.data.isTimestampFresh
 import com.tksapec.ywidget.data.needsRefreshStateCleanupAfterFinish
 import com.tksapec.ywidget.data.refreshDiagnosticSummary
+import com.tksapec.ywidget.data.summarizeNewsFetchResults
 import com.tksapec.ywidget.data.userFacingWeatherErrorMessage
+import com.tksapec.ywidget.network.EmptyRssException
 import com.tksapec.ywidget.network.RssClient
+import com.tksapec.ywidget.network.RssHttpException
+import com.tksapec.ywidget.network.RssParseException
 import com.tksapec.ywidget.network.WeatherClient
-import com.tksapec.ywidget.widget.safeUpdateAll
 import com.tksapec.ywidget.widget.redrawAllWidgetsAfterRefreshFinished
-import com.google.android.gms.tasks.CancellationTokenSource
+import com.tksapec.ywidget.widget.safeUpdateAll
 import java.io.IOException
-import com.google.android.gms.location.LocationServices
-import com.google.android.gms.location.Priority
-import java.net.HttpURLConnection
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import java.util.Locale
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resume
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
-import kotlin.coroutines.resume
 
 class RefreshWorker(
     appContext: Context,
@@ -65,20 +73,31 @@ class RefreshWorker(
 ) : CoroutineWorker(appContext, params) {
     override suspend fun doWork(): Result {
         val preferences = WidgetPreferences(applicationContext)
+        val inputGeneration = inputData.getLong(REFRESH_GENERATION_INPUT_KEY, INVALID_GENERATION)
+        val expectedGeneration = if (inputGeneration == INVALID_GENERATION) {
+            preferences.currentSettings().refreshGeneration
+        } else {
+            inputGeneration
+        }
+        var ownsRefreshState = false
         var retryNeeded = false
         var result = Result.success()
         var finalRefreshResult = RefreshResult.Success
         var finalRefreshMessage = "更新完了"
 
         try {
-            prepareRefreshWork(
-                markRunning = { preferences.markRefreshRunning() },
-                enqueueCleanup = { RefreshStateCleanupWorker.enqueue(applicationContext) },
+            ownsRefreshState = prepareRefreshWork(
+                markRunning = { preferences.markRefreshRunning(expectedGeneration) },
+                enqueueCleanup = {
+                    RefreshStateCleanupWorker.enqueue(applicationContext, expectedGeneration)
+                },
                 shouldUpdateWidget = {
                     shouldRedrawWhenRefreshStarts(preferences.currentSettings())
                 },
                 updateWidget = { safeUpdateAll(applicationContext) },
             )
+            if (!ownsRefreshState) return Result.success()
+
             withContext(Dispatchers.IO) {
                 val settings = preferences.currentSettings()
                 val rssClient = RssClient()
@@ -113,6 +132,7 @@ class RefreshWorker(
                         warningMessage = PARTIAL_NEWS_ERROR_MESSAGE.takeIf {
                             newsSummary.failedCategoryCount > 0
                         },
+                        expectedGeneration = expectedGeneration,
                     )
                     logRefreshState("after saveNews", preferences)
                     safeUpdateAll(applicationContext)
@@ -120,24 +140,31 @@ class RefreshWorker(
                         finalRefreshResult = newsOutcome.result
                         finalRefreshMessage = newsOutcome.message
                     }
-                    if (newsSummary.failures.any { it.isTransientFailure() }) retryNeeded = true
+                    if (newsSummary.failures.any { isTransientFailure(it) }) retryNeeded = true
                 } else {
-                    preferences.saveNewsError("\u30CB\u30E5\u30FC\u30B9\u53D6\u5F97\u5931\u6557")
+                    preferences.saveNewsError(
+                        message = "\u30CB\u30E5\u30FC\u30B9\u53D6\u5F97\u5931\u6557",
+                        expectedGeneration = expectedGeneration,
+                    )
                     logRefreshState("after saveNewsError", preferences)
                     safeUpdateAll(applicationContext)
                     finalRefreshResult = newsOutcome.result
                     finalRefreshMessage = newsOutcome.message
                     retryNeeded = newsSummary.failures.isEmpty() ||
-                        newsSummary.failures.any { it.isTransientFailure() }
+                        newsSummary.failures.any { isTransientFailure(it) }
                 }
 
                 if (settings.weatherEnabled && settings.weatherLocationMode != WeatherLocationMode.Disabled) {
-                    preferences.updateWeatherRefreshing(true)
+                    preferences.updateWeatherRefreshing(true, expectedGeneration)
                     if (shouldRedrawWhenWeatherRefreshStarts(settings)) {
                         safeUpdateAll(applicationContext)
                     }
                     runCatching {
-                        resolveWeatherTarget(settings = settings, preferences = preferences)
+                        resolveWeatherTarget(
+                            settings = settings,
+                            preferences = preferences,
+                            expectedGeneration = expectedGeneration,
+                        )
                     }.onSuccess { target ->
                         runCatching {
                             WeatherClient().fetch(target.latitude, target.longitude)
@@ -147,23 +174,30 @@ class RefreshWorker(
                                 temperatureCelsius = weather.temperatureCelsius,
                                 locationLabel = target.label,
                                 updatedAtMillis = System.currentTimeMillis(),
+                                expectedGeneration = expectedGeneration,
                             )
                             logRefreshState("after saveWeather", preferences)
                             safeUpdateAll(applicationContext)
                         }.onFailure { error ->
                             if (error is CancellationException) throw error
-                            preferences.saveWeatherError(userFacingWeatherErrorMessage(error))
+                            preferences.saveWeatherError(
+                                userFacingWeatherErrorMessage(error),
+                                expectedGeneration,
+                            )
                             logRefreshState("after saveWeatherError", preferences)
                             safeUpdateAll(applicationContext)
                             if (finalRefreshResult == RefreshResult.Success) {
                                 finalRefreshResult = RefreshResult.PartialSuccess
                                 finalRefreshMessage = "天気取得失敗"
                             }
-                            if (error.isTransientFailure()) retryNeeded = true
+                            if (isTransientFailure(error)) retryNeeded = true
                         }
                     }.onFailure { error ->
                         if (error is CancellationException) throw error
-                        preferences.saveWeatherError(userFacingWeatherErrorMessage(error))
+                        preferences.saveWeatherError(
+                            userFacingWeatherErrorMessage(error),
+                            expectedGeneration,
+                        )
                         logRefreshState("after saveWeatherTargetError", preferences)
                         safeUpdateAll(applicationContext)
                         if (finalRefreshResult == RefreshResult.Success) {
@@ -178,28 +212,34 @@ class RefreshWorker(
             finalRefreshResult = RefreshResult.Cancelled
             finalRefreshMessage = "更新が中断されました"
             throw error
-        } catch (error: Throwable) {
+        } catch (error: Exception) {
             Log.e("RefreshWorker", "Refresh failed", error)
             finalRefreshResult = RefreshResult.Failed
             finalRefreshMessage = "更新失敗"
-            result = if (error.isTransientFailure()) Result.retry() else Result.failure()
+            result = if (isTransientFailure(error)) Result.retry() else Result.failure()
         } finally {
-            withContext(NonCancellable) {
-                finishRefreshAndRedraw(
-                    finishRefresh = {
-                        preferences.finishRefresh(finalRefreshResult, finalRefreshMessage)
-                    },
-                    readSettings = { preferences.currentSettings() },
-                    clearRefreshState = { preferences.clearRefreshState() },
-                    redrawWidgets = {
-                        redrawAllWidgetsAfterRefreshFinished(applicationContext)
-                    },
-                    logState = { stage, state ->
-                        Log.d("RefreshWorker", "$stage: ${state.refreshDiagnosticSummary()}")
-                    },
-                    logFailure = { message, error -> Log.w("RefreshWorker", message, error) },
-                    logWarning = { message -> Log.w("RefreshWorker", message) },
-                )
+            if (ownsRefreshState) {
+                withContext(NonCancellable) {
+                    finishRefreshAndRedraw(
+                        finishRefresh = {
+                            preferences.finishRefreshIfGeneration(
+                                expectedGeneration = expectedGeneration,
+                                result = finalRefreshResult,
+                                message = finalRefreshMessage,
+                            )
+                        },
+                        readSettings = { preferences.currentSettings() },
+                        clearRefreshState = { preferences.clearRefreshState() },
+                        redrawWidgets = {
+                            redrawAllWidgetsAfterRefreshFinished(applicationContext)
+                        },
+                        logState = { stage, state ->
+                            Log.d("RefreshWorker", "$stage: ${state.refreshDiagnosticSummary()}")
+                        },
+                        logFailure = { message, error -> Log.w("RefreshWorker", message, error) },
+                        logWarning = { message -> Log.w("RefreshWorker", message) },
+                    )
+                }
             }
         }
 
@@ -230,10 +270,11 @@ class RefreshWorker(
     private suspend fun resolveWeatherTarget(
         settings: WidgetSettings,
         preferences: WidgetPreferences,
+        expectedGeneration: Long,
     ): WeatherTarget {
         return when (settings.weatherLocationMode) {
-            WeatherLocationMode.Current -> resolveCurrentLocation(settings, preferences)
-            WeatherLocationMode.Fixed -> resolveFixedLocation(settings, preferences)
+            WeatherLocationMode.Current -> resolveCurrentLocation(settings, preferences, expectedGeneration)
+            WeatherLocationMode.Fixed -> resolveFixedLocation(settings, preferences, expectedGeneration)
             WeatherLocationMode.Disabled -> error("\u5929\u6C17\u8868\u793A\u306A\u3057")
         }
     }
@@ -242,19 +283,36 @@ class RefreshWorker(
     private suspend fun resolveCurrentLocation(
         settings: WidgetSettings,
         preferences: WidgetPreferences,
+        expectedGeneration: Long,
     ): WeatherTarget {
         val locationPermissionGranted = hasLocationPermission()
-        if (!locationPermissionGranted) return selectCurrentWeatherTarget(false, null, settings)
+        val now = System.currentTimeMillis()
+        if (!locationPermissionGranted) {
+            return selectCurrentWeatherTarget(false, null, settings, now)
+        }
         val location = try {
             withTimeoutOrNull(CURRENT_LOCATION_TOTAL_TIMEOUT_MILLIS) {
                 val client = LocationServices.getFusedLocationProviderClient(applicationContext)
-                withTimeoutOrNull(LAST_LOCATION_TIMEOUT_MILLIS) {
+                val lastLocation = withTimeoutOrNull(LAST_LOCATION_TIMEOUT_MILLIS) {
                     client.lastLocation.await()
-                } ?: run {
+                }?.takeIf {
+                    isTimestampFresh(
+                        timestampMillis = it.time,
+                        nowMillis = System.currentTimeMillis(),
+                        maxAgeMillis = CURRENT_LOCATION_CACHE_MAX_AGE_MILLIS,
+                    )
+                }
+                lastLocation ?: run {
                     val cancellationTokenSource = CancellationTokenSource()
                     try {
                         withTimeoutOrNull(CURRENT_LOCATION_TIMEOUT_MILLIS) {
                             client.getCurrentLocation(locationPriority(), cancellationTokenSource.token).await()
+                        }?.takeIf {
+                            isTimestampFresh(
+                                timestampMillis = it.time,
+                                nowMillis = System.currentTimeMillis(),
+                                maxAgeMillis = CURRENT_LOCATION_CACHE_MAX_AGE_MILLIS,
+                            )
                         }
                     } finally {
                         cancellationTokenSource.cancel()
@@ -263,25 +321,37 @@ class RefreshWorker(
             }
         } catch (error: CancellationException) {
             throw error
-        } catch (error: Throwable) {
+        } catch (error: Exception) {
             Log.w("RefreshWorker", "Current location lookup failed", error)
             null
         }
 
         val currentTarget = location?.let {
             val label = reverseGeocodeSafely(it.latitude, it.longitude)
-            preferences.saveCurrentLocation(it.latitude, it.longitude, label)
+            preferences.saveCurrentLocation(
+                latitude = it.latitude,
+                longitude = it.longitude,
+                label = label,
+                locationAtMillis = System.currentTimeMillis(),
+                expectedGeneration = expectedGeneration,
+            )
             WeatherTarget(it.latitude, it.longitude, label)
         }
-        if (currentTarget == null && settings.lastCurrentLatitude != null && settings.lastCurrentLongitude != null) {
-            Log.w("RefreshWorker", "Current location unavailable; using cached location")
+        if (currentTarget == null && settings.hasFreshCachedCurrentLocation(System.currentTimeMillis())) {
+            Log.w("RefreshWorker", "Current location unavailable; using recent cached location")
         }
-        return selectCurrentWeatherTarget(locationPermissionGranted, currentTarget, settings)
+        return selectCurrentWeatherTarget(
+            locationPermissionGranted = locationPermissionGranted,
+            currentTarget = currentTarget,
+            settings = settings,
+            now = System.currentTimeMillis(),
+        )
     }
 
     private suspend fun resolveFixedLocation(
         settings: WidgetSettings,
         preferences: WidgetPreferences,
+        expectedGeneration: Long,
     ): WeatherTarget {
         val query = settings.fixedLocationQuery.trim()
         if (query.isBlank()) {
@@ -307,6 +377,7 @@ class RefreshWorker(
             latitude = address.latitude,
             longitude = address.longitude,
             label = label,
+            expectedGeneration = expectedGeneration,
         )
         return WeatherTarget(
             latitude = address.latitude,
@@ -390,15 +461,32 @@ class RefreshWorker(
         private const val GEOCODE_TIMEOUT_MILLIS = 8_000L
         private const val NEWS_CATEGORY_TIMEOUT_MILLIS = 12_000L
         private const val NEWS_TOTAL_TIMEOUT_MILLIS = 20_000L
+        private const val INVALID_GENERATION = -1L
 
-        fun enqueueImmediateByUser(context: Context) {
-            enqueueImmediate(context, userEnqueuePolicy())
+        suspend fun enqueueImmediateByUser(context: Context) {
+            val preferences = WidgetPreferences(context)
+            val refreshGeneration = preferences.updateRefreshQueued(true)
+            try {
+                enqueueImmediate(context, userEnqueuePolicy(), refreshGeneration)
+            } catch (error: Exception) {
+                preferences.finishRefreshIfGeneration(
+                    expectedGeneration = refreshGeneration,
+                    result = RefreshResult.Failed,
+                    message = "更新予約失敗",
+                )
+                throw error
+            }
         }
 
         internal fun userEnqueuePolicy(): ExistingWorkPolicy = ExistingWorkPolicy.REPLACE
 
-        private fun enqueueImmediate(context: Context, existingWorkPolicy: ExistingWorkPolicy) {
+        private fun enqueueImmediate(
+            context: Context,
+            existingWorkPolicy: ExistingWorkPolicy,
+            refreshGeneration: Long,
+        ) {
             val request = OneTimeWorkRequestBuilder<RefreshWorker>()
+                .setInputData(workDataOf(REFRESH_GENERATION_INPUT_KEY to refreshGeneration))
                 .setConstraints(networkConstraints())
                 .setBackoffCriteria(BackoffPolicy.LINEAR, BACKOFF_MINUTES, TimeUnit.MINUTES)
                 .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
@@ -411,10 +499,17 @@ class RefreshWorker(
         }
 
         suspend fun enqueueImmediateIfDueFromSettings(context: Context) {
-            val settings = WidgetPreferences(context).currentSettings()
+            val preferences = WidgetPreferences(context)
+            val settings = preferences.currentSettings()
             val now = System.currentTimeMillis()
             if (settings.isRefreshDue(now)) {
-                enqueueImmediate(context, periodicEnqueuePolicy(settings, now))
+                val policy = periodicEnqueuePolicy(settings, now)
+                val refreshGeneration = if (policy == ExistingWorkPolicy.REPLACE) {
+                    preferences.updateRefreshQueued(true)
+                } else {
+                    settings.refreshGeneration
+                }
+                enqueueImmediate(context, policy, refreshGeneration)
             }
         }
 
@@ -461,30 +556,19 @@ class RefreshWorker(
         internal fun periodicIntervalMinutes(intervalMinutes: Long): Long {
             return intervalMinutes.coerceAtLeast(MINIMUM_PERIODIC_INTERVAL_MINUTES)
         }
-
-        private fun Throwable.isTransientFailure(): Boolean {
-            if (this is SocketTimeoutException || this is UnknownHostException || this is IOException) {
-                return true
-            }
-            val message = message.orEmpty()
-            val status = Regex("""HTTP\s+(\d{3})""").find(message)
-                ?.groupValues
-                ?.getOrNull(1)
-                ?.toIntOrNull()
-            return status != null && status >= HttpURLConnection.HTTP_INTERNAL_ERROR
-        }
     }
 }
 
 internal suspend fun prepareRefreshWork(
-    markRunning: suspend () -> Unit,
+    markRunning: suspend () -> Boolean,
     enqueueCleanup: () -> Unit,
     shouldUpdateWidget: suspend () -> Boolean,
     updateWidget: suspend () -> Unit,
-) {
-    markRunning()
+): Boolean {
+    if (!markRunning()) return false
     enqueueCleanup()
     if (shouldUpdateWidget()) updateWidget()
+    return true
 }
 
 internal fun shouldRedrawWhenRefreshStarts(settings: WidgetSettings): Boolean = settings.news.isEmpty()
@@ -494,7 +578,7 @@ internal fun shouldRedrawWhenWeatherRefreshStarts(settings: WidgetSettings): Boo
 }
 
 internal suspend fun finishRefreshAndRedraw(
-    finishRefresh: suspend () -> Unit,
+    finishRefresh: suspend () -> Boolean,
     readSettings: suspend () -> WidgetSettings,
     clearRefreshState: suspend () -> Unit,
     redrawWidgets: suspend () -> Boolean,
@@ -502,7 +586,11 @@ internal suspend fun finishRefreshAndRedraw(
     logFailure: (String, Throwable) -> Unit = { _, _ -> },
     logWarning: (String) -> Unit = {},
 ): Boolean {
-    finishRefresh()
+    val finishedOwnedGeneration = finishRefresh()
+    if (!finishedOwnedGeneration) {
+        return redrawWidgets()
+    }
+
     var afterFinish = runCatching { readSettings() }
         .onSuccess { logState("after finish", it) }
         .onFailure { logFailure("Failed to verify refresh state after finish", it) }
@@ -530,6 +618,29 @@ internal suspend fun finishRefreshAndRedraw(
     return redrawWidgets()
 }
 
+internal fun isTransientFailure(error: Throwable): Boolean {
+    return when (error) {
+        is RssHttpException -> isRetryableHttpStatus(error.responseCode)
+        is RssParseException,
+        is EmptyRssException,
+        -> false
+        is SocketTimeoutException,
+        is UnknownHostException,
+        -> true
+        else -> {
+            val status = Regex("""HTTP\s+(\d{3})""").find(error.message.orEmpty())
+                ?.groupValues
+                ?.getOrNull(1)
+                ?.toIntOrNull()
+            when {
+                status != null -> isRetryableHttpStatus(status)
+                error is IOException -> true
+                else -> false
+            }
+        }
+    }
+}
+
 internal data class WeatherTarget(
     val latitude: Double,
     val longitude: Double,
@@ -540,13 +651,16 @@ internal fun selectCurrentWeatherTarget(
     locationPermissionGranted: Boolean,
     currentTarget: WeatherTarget?,
     settings: WidgetSettings,
+    now: Long,
 ): WeatherTarget {
     if (!locationPermissionGranted) error(LOCATION_PERMISSION_DENIED_MESSAGE)
     currentTarget?.let { return it }
-    val latitude = settings.lastCurrentLatitude
-    val longitude = settings.lastCurrentLongitude
-    if (latitude != null && longitude != null) {
-        return WeatherTarget(latitude, longitude, settings.lastCurrentLocationLabel)
+    if (settings.hasFreshCachedCurrentLocation(now)) {
+        return WeatherTarget(
+            settings.lastCurrentLatitude!!,
+            settings.lastCurrentLongitude!!,
+            settings.lastCurrentLocationLabel,
+        )
     }
     error(CURRENT_LOCATION_UNAVAILABLE_MESSAGE)
 }
