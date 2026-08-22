@@ -1,0 +1,24 @@
+package com.tksapec.ywidget.data
+
+import java.net.URI
+
+internal const val CURRENT_LOCATION_CACHE_MAX_AGE_MILLIS: Long = 30 * 60 * 1_000L
+
+internal fun refreshGenerationMatches(currentGeneration: Long, expectedGeneration: Long): Boolean {
+    return currentGeneration == expectedGeneration
+}
+
+internal fun isTimestampFresh(timestampMillis: Long, nowMillis: Long, maxAgeMillis: Long): Boolean {
+    if (timestampMillis <= 0L || maxAgeMillis < 0L) return false
+    if (timestampMillis > nowMillis) return false
+    return nowMillis - timestampMillis <= maxAgeMillis
+}
+
+internal fun isRetryableHttpStatus(statusCode: Int): Boolean {
+    return statusCode == 408 || statusCode == 429 || statusCode in 500..599
+}
+
+internal fun isAllowedExternalUrl(url: String): Boolean {
+    val uri = runCatching { URI(url) }.getOrNull() ?: return false
+    return uri.scheme.equals("https", ignoreCase = true) && !uri.host.isNullOrBlank()
+}
