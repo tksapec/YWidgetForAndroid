@@ -24,7 +24,6 @@ import androidx.work.workDataOf
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
 import com.google.android.gms.tasks.CancellationTokenSource
-import com.tksapec.ywidget.data.CURRENT_LOCATION_CACHE_MAX_AGE_MILLIS
 import com.tksapec.ywidget.data.CURRENT_LOCATION_UNAVAILABLE_MESSAGE
 import com.tksapec.ywidget.data.LOCATION_PERMISSION_DENIED_MESSAGE
 import com.tksapec.ywidget.data.NewsItem
@@ -35,13 +34,14 @@ import com.tksapec.ywidget.data.WeatherLocationMode
 import com.tksapec.ywidget.data.WidgetPreferences
 import com.tksapec.ywidget.data.WidgetSettings
 import com.tksapec.ywidget.data.classifyNewsRefresh
+import com.tksapec.ywidget.data.freshLocationTimestampOrNull
 import com.tksapec.ywidget.data.hasFreshCachedCurrentLocation
 import com.tksapec.ywidget.data.hasStaleRefreshState
 import com.tksapec.ywidget.data.isRefreshDue
 import com.tksapec.ywidget.data.isRetryableHttpStatus
-import com.tksapec.ywidget.data.isTimestampFresh
 import com.tksapec.ywidget.data.needsRefreshStateCleanupAfterFinish
 import com.tksapec.ywidget.data.refreshDiagnosticSummary
+import com.tksapec.ywidget.data.shouldRetryTransientFailure
 import com.tksapec.ywidget.data.summarizeNewsFetchResults
 import com.tksapec.ywidget.data.userFacingWeatherErrorMessage
 import com.tksapec.ywidget.network.EmptyRssException
@@ -106,10 +106,18 @@ class RefreshWorker(
                         coroutineScope {
                             settings.selectedCategories.map { category ->
                                 async(Dispatchers.IO) {
-                                    runCatching {
-                                        withTimeoutOrNull(NEWS_CATEGORY_TIMEOUT_MILLIS) {
-                                            rssClient.fetch(category)
-                                        } ?: throw SocketTimeoutException("RSS category timeout: ${category.name}")
+                                    try {
+                                        kotlin.Result.success(
+                                            withTimeoutOrNull(NEWS_CATEGORY_TIMEOUT_MILLIS) {
+                                                rssClient.fetch(category)
+                                            } ?: throw SocketTimeoutException(
+                                                "RSS category timeout: ${category.name}",
+                                            ),
+                                        )
+                                    } catch (error: CancellationException) {
+                                        throw error
+                                    } catch (error: Exception) {
+                                        kotlin.Result.failure(error)
                                     }
                                 }
                             }.map { it.await() }
@@ -117,10 +125,6 @@ class RefreshWorker(
                     } ?: settings.selectedCategories.map {
                         kotlin.Result.failure(SocketTimeoutException("RSS total timeout"))
                     }
-                val firstCancellation = categoryResults
-                    .mapNotNull { it.exceptionOrNull() as? CancellationException }
-                    .firstOrNull()
-                if (firstCancellation != null) throw firstCancellation
 
                 val newsSummary = summarizeNewsFetchResults(categoryResults)
                 val newsOutcome = classifyNewsRefresh(newsSummary)
@@ -159,16 +163,14 @@ class RefreshWorker(
                     if (shouldRedrawWhenWeatherRefreshStarts(settings)) {
                         safeUpdateAll(applicationContext)
                     }
-                    runCatching {
-                        resolveWeatherTarget(
+                    try {
+                        val target = resolveWeatherTarget(
                             settings = settings,
                             preferences = preferences,
                             expectedGeneration = expectedGeneration,
                         )
-                    }.onSuccess { target ->
-                        runCatching {
-                            WeatherClient().fetch(target.latitude, target.longitude)
-                        }.onSuccess { weather ->
+                        try {
+                            val weather = WeatherClient().fetch(target.latitude, target.longitude)
                             preferences.saveWeather(
                                 code = weather.code,
                                 temperatureCelsius = weather.temperatureCelsius,
@@ -178,8 +180,9 @@ class RefreshWorker(
                             )
                             logRefreshState("after saveWeather", preferences)
                             safeUpdateAll(applicationContext)
-                        }.onFailure { error ->
-                            if (error is CancellationException) throw error
+                        } catch (error: CancellationException) {
+                            throw error
+                        } catch (error: Exception) {
                             preferences.saveWeatherError(
                                 userFacingWeatherErrorMessage(error),
                                 expectedGeneration,
@@ -192,8 +195,9 @@ class RefreshWorker(
                             }
                             if (isTransientFailure(error)) retryNeeded = true
                         }
-                    }.onFailure { error ->
-                        if (error is CancellationException) throw error
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (error: Exception) {
                         preferences.saveWeatherError(
                             userFacingWeatherErrorMessage(error),
                             expectedGeneration,
@@ -207,7 +211,11 @@ class RefreshWorker(
                     }
                 }
             }
-            result = if (retryNeeded) Result.retry() else Result.success()
+            result = when {
+                shouldRetryTransientFailure(retryNeeded, runAttemptCount) -> Result.retry()
+                finalRefreshResult == RefreshResult.Failed -> Result.failure()
+                else -> Result.success()
+            }
         } catch (error: CancellationException) {
             finalRefreshResult = RefreshResult.Cancelled
             finalRefreshMessage = "更新が中断されました"
@@ -216,7 +224,11 @@ class RefreshWorker(
             Log.e("RefreshWorker", "Refresh failed", error)
             finalRefreshResult = RefreshResult.Failed
             finalRefreshMessage = "更新失敗"
-            result = if (isTransientFailure(error)) Result.retry() else Result.failure()
+            result = if (shouldRetryTransientFailure(isTransientFailure(error), runAttemptCount)) {
+                Result.retry()
+            } else {
+                Result.failure()
+            }
         } finally {
             if (ownsRefreshState) {
                 withContext(NonCancellable) {
@@ -264,9 +276,13 @@ class RefreshWorker(
     }
 
     private suspend fun logRefreshState(stage: String, preferences: WidgetPreferences) {
-        runCatching { preferences.currentSettings() }
-            .onSuccess { Log.d("RefreshWorker", "$stage: ${it.refreshDiagnosticSummary()}") }
-            .onFailure { Log.w("RefreshWorker", "Failed to read refresh state for $stage", it) }
+        try {
+            Log.d("RefreshWorker", "$stage: ${preferences.currentSettings().refreshDiagnosticSummary()}")
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            Log.w("RefreshWorker", "Failed to read refresh state for $stage", error)
+        }
     }
 
     private fun locationPriority(): Int {
@@ -302,11 +318,10 @@ class RefreshWorker(
                 val lastLocation = withTimeoutOrNull(LAST_LOCATION_TIMEOUT_MILLIS) {
                     client.lastLocation.await()
                 }?.takeIf {
-                    isTimestampFresh(
-                        timestampMillis = it.time,
+                    freshLocationTimestampOrNull(
+                        locationTimestampMillis = it.time,
                         nowMillis = System.currentTimeMillis(),
-                        maxAgeMillis = CURRENT_LOCATION_CACHE_MAX_AGE_MILLIS,
-                    )
+                    ) != null
                 }
                 lastLocation ?: run {
                     val cancellationTokenSource = CancellationTokenSource()
@@ -314,11 +329,10 @@ class RefreshWorker(
                         withTimeoutOrNull(CURRENT_LOCATION_TIMEOUT_MILLIS) {
                             client.getCurrentLocation(locationPriority(), cancellationTokenSource.token).await()
                         }?.takeIf {
-                            isTimestampFresh(
-                                timestampMillis = it.time,
+                            freshLocationTimestampOrNull(
+                                locationTimestampMillis = it.time,
                                 nowMillis = System.currentTimeMillis(),
-                                maxAgeMillis = CURRENT_LOCATION_CACHE_MAX_AGE_MILLIS,
-                            )
+                            ) != null
                         }
                     } finally {
                         cancellationTokenSource.cancel()
@@ -338,7 +352,7 @@ class RefreshWorker(
                 latitude = it.latitude,
                 longitude = it.longitude,
                 label = label,
-                locationAtMillis = System.currentTimeMillis(),
+                locationAtMillis = it.time,
                 expectedGeneration = expectedGeneration,
             )
             WeatherTarget(it.latitude, it.longitude, label)
@@ -597,21 +611,35 @@ internal suspend fun finishRefreshAndRedraw(
         return redrawWidgets()
     }
 
-    var afterFinish = runCatching { readSettings() }
-        .onSuccess { logState("after finish", it) }
-        .onFailure { logFailure("Failed to verify refresh state after finish", it) }
-        .getOrNull()
+    var afterFinish = try {
+        readSettings().also { logState("after finish", it) }
+    } catch (error: CancellationException) {
+        throw error
+    } catch (error: Exception) {
+        logFailure("Failed to verify refresh state after finish", error)
+        null
+    }
 
     if (afterFinish?.needsRefreshStateCleanupAfterFinish() == true) {
         logWarning("Refresh flags remained after finish. Clearing again.")
-        val clearSucceeded = runCatching { clearRefreshState() }
-            .onFailure { logFailure("Failed to force-clear refresh state", it) }
-            .isSuccess
+        val clearSucceeded = try {
+            clearRefreshState()
+            true
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            logFailure("Failed to force-clear refresh state", error)
+            false
+        }
         if (clearSucceeded) {
-            afterFinish = runCatching { readSettings() }
-                .onSuccess { logState("after forced clear", it) }
-                .onFailure { logFailure("Failed to verify forced refresh-state clear", it) }
-                .getOrNull()
+            afterFinish = try {
+                readSettings().also { logState("after forced clear", it) }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                logFailure("Failed to verify forced refresh-state clear", error)
+                null
+            }
         }
     }
 
