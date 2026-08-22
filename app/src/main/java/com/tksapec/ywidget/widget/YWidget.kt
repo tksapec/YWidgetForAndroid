@@ -31,8 +31,8 @@ import androidx.glance.appwidget.updateAll
 import androidx.glance.background
 import androidx.glance.layout.Alignment
 import androidx.glance.layout.Box
-import androidx.glance.layout.ColumnScope
 import androidx.glance.layout.Column
+import androidx.glance.layout.ColumnScope
 import androidx.glance.layout.Row
 import androidx.glance.layout.RowScope
 import androidx.glance.layout.Spacer
@@ -49,22 +49,23 @@ import androidx.glance.unit.ColorProvider
 import com.tksapec.ywidget.data.LauncherAppShortcut
 import com.tksapec.ywidget.data.NewsItem
 import com.tksapec.ywidget.data.RefreshResult
+import com.tksapec.ywidget.data.WeatherLocationMode
 import com.tksapec.ywidget.data.WidgetPreferences
 import com.tksapec.ywidget.data.WidgetSettings
 import com.tksapec.ywidget.data.hasStaleRefreshState
-import com.tksapec.ywidget.data.WeatherLocationMode
+import com.tksapec.ywidget.data.isAllowedExternalUrl
 import com.tksapec.ywidget.data.isNewsRefreshingActive
 import com.tksapec.ywidget.data.isRefreshQueuedActive
 import com.tksapec.ywidget.data.isWeatherRefreshingActive
 import com.tksapec.ywidget.data.refreshDiagnosticSummary
 import com.tksapec.ywidget.data.weatherIconForCode
-import com.tksapec.ywidget.work.RefreshStateCleanupWorker
 import com.tksapec.ywidget.work.RefreshWorker
-import java.util.Calendar
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -101,9 +102,13 @@ suspend fun redrawAllWidgetsAfterRefreshFinished(context: Context): Boolean {
 }
 
 private suspend fun logWidgetState(stage: String, preferences: WidgetPreferences) {
-    runCatching { preferences.currentSettings() }
-        .onSuccess { Log.d("YWidget", "$stage: ${it.refreshDiagnosticSummary()}") }
-        .onFailure { Log.w("YWidget", "Failed to read widget state for $stage", it) }
+    try {
+        Log.d("YWidget", "$stage: ${preferences.currentSettings().refreshDiagnosticSummary()}")
+    } catch (error: CancellationException) {
+        throw error
+    } catch (error: Exception) {
+        Log.w("YWidget", "Failed to read widget state for $stage", error)
+    }
 }
 
 internal suspend fun performWidgetUpdate(
@@ -113,15 +118,32 @@ internal suspend fun performWidgetUpdate(
     logUpdateError: (Throwable) -> Unit = {},
     logPersistenceError: (Throwable) -> Unit = {},
 ): Boolean {
-    val updateError = runCatching { updateAll() }.exceptionOrNull()
+    val updateError = try {
+        updateAll()
+        null
+    } catch (error: CancellationException) {
+        throw error
+    } catch (error: Exception) {
+        error
+    }
     if (updateError != null) {
         logUpdateError(updateError)
-        runCatching {
+        try {
             saveError(updateError.message?.take(160) ?: updateError.javaClass.simpleName)
-        }.onFailure(logPersistenceError)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            logPersistenceError(error)
+        }
         return false
     }
-    runCatching { saveSuccess() }.onFailure(logPersistenceError)
+    try {
+        saveSuccess()
+    } catch (error: CancellationException) {
+        throw error
+    } catch (error: Exception) {
+        logPersistenceError(error)
+    }
     return true
 }
 
@@ -423,14 +445,12 @@ class RefreshAction : ActionCallback {
         parameters: ActionParameters,
     ) {
         val appContext = context.applicationContext
-        val preferences = WidgetPreferences(appContext)
         try {
-            preferences.updateRefreshQueued(true)
-            RefreshStateCleanupWorker.enqueue(appContext)
-            safeUpdateAll(appContext)
             RefreshWorker.enqueueImmediateByUser(appContext)
-        } catch (_: Throwable) {
-            preferences.finishRefresh(RefreshResult.Failed, "更新予約失敗")
+            safeUpdateAll(appContext)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
             safeUpdateAll(appContext)
         }
     }
@@ -457,6 +477,7 @@ class OpenUrlAction : ActionCallback {
         parameters: ActionParameters,
     ) {
         val url = parameters[UrlParameterKey] ?: return
+        if (!isAllowedExternalUrl(url)) return
         context.openYahooUrlWithFallback(url)
     }
 }
@@ -558,6 +579,7 @@ private fun Context.hasPlacedWidgets(): Boolean {
 }
 
 private fun Context.openYahooUrlWithFallback(url: String) {
+    if (!isAllowedExternalUrl(url)) return
     val uri = Uri.parse(url)
     val yahooIntent = Intent(Intent.ACTION_VIEW, uri).apply {
         setPackage(YAHOO_APP_PACKAGE)
