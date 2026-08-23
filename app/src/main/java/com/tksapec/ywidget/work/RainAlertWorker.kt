@@ -72,24 +72,24 @@ class RainAlertWorker(
     private suspend fun doWorkSerialized(): Result {
         val preferences = WidgetPreferences(applicationContext)
         if (!hasPlacedWidgets(applicationContext)) {
-            cancel(applicationContext)
             preferences.clearRainAlert()
+            cancel(applicationContext)
             return Result.success()
         }
 
         val settings = preferences.currentSettings()
         if (!isRainAlertConfigured(settings)) {
-            cancel(applicationContext)
             preferences.clearRainAlert()
             safeUpdateAll(applicationContext)
+            cancel(applicationContext)
             return Result.success()
         }
 
         val clientId = BuildConfig.YAHOO_CLIENT_ID.trim()
         if (clientId.isBlank()) {
-            cancel(applicationContext)
             preferences.clearRainAlert(CLIENT_ID_MISSING_MESSAGE)
             safeUpdateAll(applicationContext)
+            cancel(applicationContext)
             return Result.success()
         }
 
