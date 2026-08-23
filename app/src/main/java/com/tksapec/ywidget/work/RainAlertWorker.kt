@@ -172,7 +172,6 @@ class RainAlertWorker(
         private const val TAG = "RainAlertWorker"
         private const val UNIQUE_PERIODIC_WORK = "yahoo_rain_alert_periodic"
         private const val UNIQUE_IMMEDIATE_WORK = "yahoo_rain_alert_immediate"
-        private const val PERIODIC_INTERVAL_MINUTES = 15L
         private const val BACKOFF_MINUTES = 10L
         private const val LAST_LOCATION_TIMEOUT_MILLIS = 2_000L
         private const val CURRENT_LOCATION_TIMEOUT_MILLIS = 8_000L
@@ -181,12 +180,27 @@ class RainAlertWorker(
         private const val LOCATION_UNAVAILABLE_MESSAGE = "雨予報用の位置情報を取得できません"
 
         suspend fun scheduleFromSettings(context: Context) {
-            val settings = WidgetPreferences(context).currentSettings()
+            val preferences = WidgetPreferences(context)
+            if (BuildConfig.YAHOO_CLIENT_ID.isBlank()) {
+                cancel(context)
+                preferences.clearRainAlert(CLIENT_ID_MISSING_MESSAGE)
+                return
+            }
+            val settings = preferences.currentSettings()
             if (isRainAlertConfigured(settings)) {
                 schedule(context)
             } else {
                 cancel(context)
+                preferences.clearRainAlert()
             }
+        }
+
+        suspend fun enqueueImmediateIfConfigured(context: Context): Boolean {
+            scheduleFromSettings(context)
+            if (BuildConfig.YAHOO_CLIENT_ID.isBlank()) return false
+            if (!isRainAlertConfigured(WidgetPreferences(context).currentSettings())) return false
+            enqueueImmediate(context)
+            return true
         }
 
         fun schedule(context: Context) {
