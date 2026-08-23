@@ -73,7 +73,6 @@ class RainAlertWorker(
         val preferences = WidgetPreferences(applicationContext)
         if (!hasPlacedWidgets(applicationContext)) {
             preferences.clearRainAlert()
-            cancel(applicationContext)
             return Result.success()
         }
 
@@ -81,7 +80,6 @@ class RainAlertWorker(
         if (!isRainAlertConfigured(settings)) {
             preferences.clearRainAlert()
             safeUpdateAll(applicationContext)
-            cancel(applicationContext)
             return Result.success()
         }
 
@@ -89,7 +87,6 @@ class RainAlertWorker(
         if (clientId.isBlank()) {
             preferences.clearRainAlert(CLIENT_ID_MISSING_MESSAGE)
             safeUpdateAll(applicationContext)
-            cancel(applicationContext)
             return Result.success()
         }
 
@@ -137,7 +134,7 @@ class RainAlertWorker(
                 writeGuard,
             )
             if (savedError) safeUpdateAll(applicationContext)
-            if (error is YahooRainHttpException && !isTransientRainFailure(error)) {
+            if (savedError && error is YahooRainHttpException && !isTransientRainFailure(error)) {
                 cancelPolling(applicationContext)
             }
             if (shouldRetryTransientFailure(isTransientRainFailure(error), runAttemptCount)) {
