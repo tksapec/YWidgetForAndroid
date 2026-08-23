@@ -25,3 +25,12 @@ Set `YAHOO_CLIENT_ID` in the build environment before invoking Gradle.
 If no Client ID is configured, the application continues to build and the existing news/weather features continue to work, but Yahoo rain fetching is disabled and the rain worker records a diagnostic error instead of showing a stale warning.
 
 Use a Client ID registered for this application. Do not commit the Client ID to source control; a client-side application cannot make the identifier truly secret, but keeping it outside the public repository reduces accidental reuse and quota consumption.
+
+## Attribution when publishing
+
+Yahoo! Developer Network requires applications using its APIs to provide the prescribed credit. For a smart-device application without its own web site, the current credit rules instruct developers to place the prescribed credit at the bottom of the application store page. Confirm the latest rules before publishing:
+
+- https://developer.yahoo.co.jp/attribution/
+- https://developer.yahoo.co.jp/webapi/map/openlocalplatform/v1/weather.html
+
+Do not invent or restyle a Yahoo credit/logo inside the widget; use the current prescribed credit format and placement rules.
