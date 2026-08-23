@@ -57,7 +57,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
 internal val rainAlertExecutionMutex = Mutex()
-private val rainAlertScheduleMutex = Mutex()
+private val rainAlertScheduleCoordinator = RainAlertScheduleCoordinator()
 
 class RainAlertWorker(
     appContext: Context,
@@ -311,36 +311,36 @@ class RainAlertWorker(
         private const val LOCATION_UNAVAILABLE_MESSAGE = "雨予報用の位置情報を取得できません"
 
         suspend fun scheduleFromSettings(context: Context) {
-            rainAlertScheduleMutex.withLock {
+            rainAlertScheduleCoordinator.runSerialized {
                 val preferences = WidgetPreferences(context)
                 val settings = preferences.currentSettings()
                 if (!hasPlacedWidgets(context) || !isRainAlertConfigured(settings)) {
                     cancelInternal(context)
                     preferences.clearRainAlert()
-                    return@withLock
+                    return@runSerialized
                 }
                 if (BuildConfig.YAHOO_CLIENT_ID.isBlank()) {
                     cancelInternal(context)
                     preferences.clearRainAlert(CLIENT_ID_MISSING_MESSAGE)
-                    return@withLock
+                    return@runSerialized
                 }
                 scheduleInternal(context)
             }
         }
 
         suspend fun enqueueImmediateIfConfigured(context: Context): Boolean {
-            return rainAlertScheduleMutex.withLock {
+            return rainAlertScheduleCoordinator.runSerialized {
                 val preferences = WidgetPreferences(context)
                 val settings = preferences.currentSettings()
                 if (!hasPlacedWidgets(context) || !isRainAlertConfigured(settings)) {
                     cancelInternal(context)
                     preferences.clearRainAlert()
-                    return@withLock false
+                    return@runSerialized false
                 }
                 if (BuildConfig.YAHOO_CLIENT_ID.isBlank()) {
                     cancelInternal(context)
                     preferences.clearRainAlert(CLIENT_ID_MISSING_MESSAGE)
-                    return@withLock false
+                    return@runSerialized false
                 }
                 scheduleInternal(context)
                 enqueueImmediateInternal(context)
@@ -356,8 +356,12 @@ class RainAlertWorker(
         }
 
         suspend fun cancelAndAwait(context: Context) {
-            rainAlertScheduleMutex.withLock {
+            rainAlertScheduleCoordinator.runSerialized {
+                val preferences = WidgetPreferences(context)
+                val wasEnabled = preferences.currentSettings().rainAlertEnabled
+                if (wasEnabled) preferences.updateRainAlertEnabled(false)
                 cancelInternal(context)
+                if (wasEnabled) preferences.updateRainAlertEnabled(true)
             }
         }
 
