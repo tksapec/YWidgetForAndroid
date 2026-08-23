@@ -176,6 +176,8 @@ class RainAlertWorker(
         settings: WidgetSettings,
         preferences: WidgetPreferences,
     ): GuardedRainTarget? {
+        val locationPermissionGranted = hasLocationPermission()
+        if (!locationPermissionGranted) return null
         val live = resolveLiveCurrentTarget()
         val latest = preferences.currentSettings()
         if (latest.rainAlertGeneration != settings.rainAlertGeneration) return null
@@ -183,6 +185,7 @@ class RainAlertWorker(
             settings = latest,
             currentTarget = live,
             now = System.currentTimeMillis(),
+            currentLocationPermissionGranted = locationPermissionGranted,
         ) ?: return null
         val capturedAt = target.locationAtMillis ?: return null
         return GuardedRainTarget(
@@ -443,6 +446,7 @@ internal fun selectRainTarget(
     settings: WidgetSettings,
     currentTarget: RainTarget?,
     now: Long,
+    currentLocationPermissionGranted: Boolean = true,
 ): RainTarget? {
     if (!isRainAlertConfigured(settings)) return null
     return when (settings.weatherLocationMode) {
@@ -452,6 +456,7 @@ internal fun selectRainTarget(
             RainTarget(latitude, longitude)
         }
         WeatherLocationMode.Current -> {
+            if (!currentLocationPermissionGranted) return null
             val cachedTarget = if (settings.hasFreshCachedCurrentLocation(now)) {
                 RainTarget(
                     latitude = settings.lastCurrentLatitude!!,
