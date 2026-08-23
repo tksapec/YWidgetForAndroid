@@ -136,7 +136,7 @@ class RainAlertWorker(
     ): RainTarget? {
         return when (settings.weatherLocationMode) {
             WeatherLocationMode.Current -> {
-                val live = resolveLiveCurrentTarget(preferences)
+                val live = resolveLiveCurrentTarget()
                 selectRainTarget(
                     settings = settings,
                     currentTarget = live,
@@ -166,7 +166,7 @@ class RainAlertWorker(
     }
 
     @SuppressLint("MissingPermission")
-    private suspend fun resolveLiveCurrentTarget(preferences: WidgetPreferences): RainTarget? {
+    private suspend fun resolveLiveCurrentTarget(): RainTarget? {
         if (!hasLocationPermission()) return null
         val client = LocationServices.getFusedLocationProviderClient(applicationContext)
         val location = try {
@@ -205,12 +205,6 @@ class RainAlertWorker(
             null
         } ?: return null
 
-        preferences.saveCurrentLocation(
-            latitude = location.latitude,
-            longitude = location.longitude,
-            label = null,
-            locationAtMillis = location.time,
-        )
         return RainTarget(location.latitude, location.longitude)
     }
 
