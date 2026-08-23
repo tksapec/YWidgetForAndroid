@@ -70,7 +70,7 @@ class RainAlertWorker(
     private suspend fun doWorkSerialized(): Result {
         val preferences = WidgetPreferences(applicationContext)
         if (!hasPlacedWidgets(applicationContext)) {
-            cancelAndAwait(applicationContext)
+            cancel(applicationContext)
             preferences.clearRainAlert()
             return Result.success()
         }
@@ -132,6 +132,9 @@ class RainAlertWorker(
                 writeGuard,
             )
             if (savedError) safeUpdateAll(applicationContext)
+            if (error is YahooRainHttpException && !isTransientRainFailure(error)) {
+                cancel(applicationContext)
+            }
             if (shouldRetryTransientFailure(isTransientRainFailure(error), runAttemptCount)) {
                 Result.retry()
             } else {
@@ -345,15 +348,6 @@ class RainAlertWorker(
                 enqueueImmediateInternal(context)
                 true
             }
-        }
-
-        fun enqueueImmediate(context: Context) {
-            val request = immediateRequest()
-            WorkManager.getInstance(context).enqueueUniqueWork(
-                UNIQUE_IMMEDIATE_WORK,
-                ExistingWorkPolicy.REPLACE,
-                request,
-            )
         }
 
         fun cancel(context: Context) {
