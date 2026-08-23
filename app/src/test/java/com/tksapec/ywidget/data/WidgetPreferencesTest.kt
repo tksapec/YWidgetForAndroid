@@ -156,20 +156,35 @@ class WidgetPreferencesTest {
     }
 
     @Test
-    fun rainAlertDefaultsToOptOutAndToggleInvalidatesOldGeneration() = withPreferences { preferences ->
+    fun rainAlertDefaultsToOptOutAndUsesIndependentGeneration() = withPreferences { preferences ->
         val before = preferences.currentSettings()
         assertFalse(before.rainAlertEnabled)
 
         preferences.updateRainAlertEnabled(true)
         val enabled = preferences.currentSettings()
         assertTrue(enabled.rainAlertEnabled)
-        assertTrue(enabled.refreshGeneration != before.refreshGeneration)
+        assertEquals(before.refreshGeneration, enabled.refreshGeneration)
+        assertTrue(enabled.rainAlertGeneration != before.rainAlertGeneration)
 
-        val enabledGeneration = enabled.refreshGeneration
+        val enabledRainGeneration = enabled.rainAlertGeneration
         preferences.updateRainAlertEnabled(false)
         val disabled = preferences.currentSettings()
         assertFalse(disabled.rainAlertEnabled)
-        assertTrue(disabled.refreshGeneration != enabledGeneration)
+        assertEquals(before.refreshGeneration, disabled.refreshGeneration)
+        assertTrue(disabled.rainAlertGeneration != enabledRainGeneration)
+    }
+
+    @Test
+    fun normalNewsRefreshDoesNotInvalidateRainGeneration() = withPreferences { preferences ->
+        preferences.updateWeatherLocationMode(WeatherLocationMode.Fixed)
+        preferences.updateRainAlertEnabled(true)
+        val before = preferences.currentSettings()
+
+        preferences.updateRefreshQueued(true)
+        val after = preferences.currentSettings()
+
+        assertTrue(after.refreshGeneration != before.refreshGeneration)
+        assertEquals(before.rainAlertGeneration, after.rainAlertGeneration)
     }
 
     @Test
@@ -190,7 +205,7 @@ class WidgetPreferencesTest {
         val settings = preferences.currentSettings()
         assertEquals(RainAlertLevel.Imminent, settings.rainAlertLevel)
         assertEquals(10, settings.rainAlertMinutesUntilRain)
-        assertEquals(605_000L, settings.rainAlertRainAtMillis)
+        assertEquals(605_000L, settings.rainAlertRainAtMillis!!)
         assertEquals(2.5, settings.rainAlertRainfallMmPerHour!!, 0.0001)
         assertTrue(settings.rainAlertNearbyOnly)
         assertEquals(5_000L, settings.rainAlertUpdatedAtMillis)
@@ -202,8 +217,8 @@ class WidgetPreferencesTest {
         preferences.updateWeatherLocationMode(WeatherLocationMode.Fixed)
         preferences.updateFixedLocationQuery("大阪市")
         preferences.updateRainAlertEnabled(true)
-        val oldGeneration = preferences.currentSettings().refreshGeneration
-        val oldGuard = RainAlertWriteGuard(oldGeneration)
+        val oldRainGeneration = preferences.currentSettings().rainAlertGeneration
+        val oldGuard = RainAlertWriteGuard(oldRainGeneration)
 
         preferences.updateFixedLocationQuery("神戸市")
         val saved = preferences.saveRainAlert(
@@ -225,16 +240,18 @@ class WidgetPreferencesTest {
     fun currentRainResultCannotSaveAfterNewerLocationReplacesSnapshot() = withPreferences { preferences ->
         preferences.updateWeatherLocationMode(WeatherLocationMode.Current)
         preferences.updateRainAlertEnabled(true)
-        val generation = preferences.currentSettings().refreshGeneration
+        val settings = preferences.currentSettings()
+        val normalGeneration = settings.refreshGeneration
+        val rainGeneration = settings.rainAlertGeneration
         preferences.saveCurrentLocation(
             latitude = 34.6937,
             longitude = 135.5023,
             label = "大阪",
             locationAtMillis = 1_000L,
-            expectedGeneration = generation,
+            expectedGeneration = normalGeneration,
         )
         val guard = RainAlertWriteGuard(
-            expectedRefreshGeneration = generation,
+            expectedRainGeneration = rainGeneration,
             expectedCurrentLatitude = 34.6937,
             expectedCurrentLongitude = 135.5023,
             expectedCurrentLocationAtMillis = 1_000L,
@@ -245,7 +262,7 @@ class WidgetPreferencesTest {
             longitude = 135.5100,
             label = "大阪",
             locationAtMillis = 2_000L,
-            expectedGeneration = generation,
+            expectedGeneration = normalGeneration,
         )
         val saved = preferences.saveRainAlert(
             RainAlertState(
@@ -266,34 +283,34 @@ class WidgetPreferencesTest {
     fun rainLocationSnapshotPreservesExistingReverseGeocodeLabel() = withPreferences { preferences ->
         preferences.updateWeatherLocationMode(WeatherLocationMode.Current)
         preferences.updateRainAlertEnabled(true)
-        val generation = preferences.currentSettings().refreshGeneration
+        val settings = preferences.currentSettings()
         preferences.saveCurrentLocation(
             latitude = 34.6937,
             longitude = 135.5023,
             label = "大阪市",
             locationAtMillis = 1_000L,
-            expectedGeneration = generation,
+            expectedGeneration = settings.refreshGeneration,
         )
 
         val guard = preferences.saveRainCurrentLocationIfGeneration(
             latitude = 34.6940,
             longitude = 135.5030,
             locationAtMillis = 2_000L,
-            expectedGeneration = generation,
+            expectedGeneration = settings.rainAlertGeneration,
         )
 
         assertNotNull(guard)
-        val settings = preferences.currentSettings()
-        assertEquals("大阪市", settings.lastCurrentLocationLabel)
-        assertEquals(34.6940, settings.lastCurrentLatitude!!, 0.0001)
-        assertEquals(2_000L, settings.lastCurrentLocationAtMillis)
+        val after = preferences.currentSettings()
+        assertEquals("大阪市", after.lastCurrentLocationLabel)
+        assertEquals(34.6940, after.lastCurrentLatitude!!, 0.0001)
+        assertEquals(2_000L, after.lastCurrentLocationAtMillis)
     }
 
     @Test
     fun rainGuardRejectsWritesAfterOptOut() = withPreferences { preferences ->
         preferences.updateWeatherLocationMode(WeatherLocationMode.Fixed)
         preferences.updateRainAlertEnabled(true)
-        val guard = RainAlertWriteGuard(preferences.currentSettings().refreshGeneration)
+        val guard = RainAlertWriteGuard(preferences.currentSettings().rainAlertGeneration)
 
         preferences.updateRainAlertEnabled(false)
         val saved = preferences.saveRainAlert(
