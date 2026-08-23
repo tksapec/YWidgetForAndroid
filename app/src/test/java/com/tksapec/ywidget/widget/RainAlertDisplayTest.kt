@@ -129,7 +129,24 @@ class RainAlertDisplayTest {
             now = now,
         )!!
 
-        assertEquals("☔ 周辺でまもなくに雨 1.5 mm/h", display.text)
+        assertEquals("☔ 周辺でまもなく雨 1.5 mm/h", display.text)
+    }
+
+    @Test
+    fun centerForecastAtItsPredictedTimeUsesNaturalSoonWording() {
+        val now = 10_000L
+        val display = rainAlertDisplay(
+            settings(
+                level = RainAlertLevel.Imminent,
+                minutes = 0,
+                rainfall = 1.0,
+                updatedAt = now,
+                rainAt = now,
+            ),
+            now = now,
+        )!!
+
+        assertEquals("☔ まもなく雨 1.0 mm/h", display.text)
     }
 
     @Test
