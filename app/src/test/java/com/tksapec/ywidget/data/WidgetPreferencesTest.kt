@@ -76,6 +76,22 @@ class WidgetPreferencesTest {
     }
 
     @Test
+    fun resetInvalidatesQueuedAndRunningWorkers() = withPreferences { preferences ->
+        val oldGeneration = preferences.updateRefreshQueued(true)
+        assertTrue(preferences.markRefreshRunning(oldGeneration, startedAtMillis = 1_000L))
+
+        preferences.clearRefreshState()
+
+        val settings = preferences.currentSettings()
+        assertTrue(settings.refreshGeneration != oldGeneration)
+        assertFalse(settings.refreshQueued)
+        assertFalse(settings.newsRefreshing)
+        assertFalse(settings.weatherRefreshing)
+        assertEquals(0L, settings.refreshStartedAtMillis)
+        assertFalse(preferences.markRefreshRunning(oldGeneration, startedAtMillis = 2_000L))
+    }
+
+    @Test
     fun changingCategoriesClearsMismatchedNewsCache() = withPreferences { preferences ->
         preferences.saveNews(
             news = listOf(NewsItem("top", "https://example.com/top")),
