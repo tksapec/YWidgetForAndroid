@@ -42,7 +42,7 @@ internal data class RainObservation(
     val rainfallMmPerHour: Double,
 )
 
-internal data class RainAlertState(
+data class RainAlertState(
     val level: RainAlertLevel,
     val minutesUntilRain: Int? = null,
     val rainfallMmPerHour: Double? = null,
