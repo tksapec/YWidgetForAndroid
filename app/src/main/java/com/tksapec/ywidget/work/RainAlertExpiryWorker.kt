@@ -7,11 +7,12 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
-import com.tksapec.ywidget.data.RAIN_ALERT_MAX_AGE_MILLIS
 import com.tksapec.ywidget.data.RainAlertLevel
+import com.tksapec.ywidget.data.RainAlertState
 import com.tksapec.ywidget.data.WidgetPreferences
 import com.tksapec.ywidget.data.WidgetSettings
-import com.tksapec.ywidget.data.isRainAlertFresh
+import com.tksapec.ywidget.data.isEffectiveRainAlertFresh
+import com.tksapec.ywidget.data.rainAlertExpiryAtMillis
 import com.tksapec.ywidget.widget.safeUpdateAll
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.sync.withLock
@@ -33,7 +34,7 @@ class RainAlertExpiryWorker(
                 nowMillis = System.currentTimeMillis(),
             )
         ) {
-            preferences.clearRainAlert()
+            preferences.clearRainAlert(settings.lastRainAlertError)
             safeUpdateAll(applicationContext)
         }
         Result.success()
@@ -43,10 +44,16 @@ class RainAlertExpiryWorker(
         private const val UNIQUE_EXPIRY_WORK = "yahoo_rain_alert_expiry"
         private const val UPDATED_AT_INPUT_KEY = "rain_alert_updated_at_millis"
 
-        fun schedule(context: Context, updatedAtMillis: Long) {
+        fun schedule(context: Context, alert: RainAlertState) {
+            val expiryAtMillis = rainAlertExpiryAtMillis(alert)
+            if (expiryAtMillis == null) {
+                cancel(context)
+                return
+            }
+            val delayMillis = (expiryAtMillis - System.currentTimeMillis()).coerceAtLeast(0L)
             val request = OneTimeWorkRequestBuilder<RainAlertExpiryWorker>()
-                .setInputData(workDataOf(UPDATED_AT_INPUT_KEY to updatedAtMillis))
-                .setInitialDelay(RAIN_ALERT_MAX_AGE_MILLIS + 1_000L, TimeUnit.MILLISECONDS)
+                .setInputData(workDataOf(UPDATED_AT_INPUT_KEY to alert.updatedAtMillis))
+                .setInitialDelay(delayMillis, TimeUnit.MILLISECONDS)
                 .build()
             WorkManager.getInstance(context).enqueueUniqueWork(
                 UNIQUE_EXPIRY_WORK,
@@ -68,5 +75,11 @@ internal fun shouldExpireRainAlert(
 ): Boolean {
     return settings.rainAlertLevel != RainAlertLevel.None &&
         settings.rainAlertUpdatedAtMillis == expectedUpdatedAtMillis &&
-        !isRainAlertFresh(settings.rainAlertUpdatedAtMillis, nowMillis)
+        !isEffectiveRainAlertFresh(
+            storedLevel = settings.rainAlertLevel,
+            updatedAtMillis = settings.rainAlertUpdatedAtMillis,
+            rainAtMillis = settings.rainAlertRainAtMillis,
+            fallbackMinutesUntilRain = settings.rainAlertMinutesUntilRain,
+            nowMillis = nowMillis,
+        )
 }

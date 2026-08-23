@@ -2,6 +2,8 @@ package com.tksapec.ywidget.work
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.appwidget.AppWidgetManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.pm.PackageManager
 import android.location.Address
@@ -19,22 +21,27 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import androidx.work.await
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
 import com.google.android.gms.tasks.CancellationTokenSource
 import com.tksapec.ywidget.BuildConfig
+import com.tksapec.ywidget.data.RAIN_CENTER_PROBE_ID
+import com.tksapec.ywidget.data.RainAlertWriteGuard
+import com.tksapec.ywidget.data.RainObservation
+import com.tksapec.ywidget.data.RainObservationType
 import com.tksapec.ywidget.data.WeatherLocationMode
 import com.tksapec.ywidget.data.WidgetPreferences
 import com.tksapec.ywidget.data.WidgetSettings
 import com.tksapec.ywidget.data.buildRainProbePoints
 import com.tksapec.ywidget.data.evaluateRainAlert
 import com.tksapec.ywidget.data.freshLocationTimestampOrNull
-import com.tksapec.ywidget.data.hasFreshCachedCurrentLocation
 import com.tksapec.ywidget.data.isRetryableHttpStatus
 import com.tksapec.ywidget.data.shouldRetryTransientFailure
 import com.tksapec.ywidget.network.YahooRainClient
 import com.tksapec.ywidget.network.YahooRainHttpException
 import com.tksapec.ywidget.network.YahooRainParseException
+import com.tksapec.ywidget.widget.YWidgetReceiver
 import com.tksapec.ywidget.widget.safeUpdateAll
 import java.io.IOException
 import java.net.SocketTimeoutException
@@ -52,6 +59,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
 internal val rainAlertExecutionMutex = Mutex()
+private val rainAlertScheduleCoordinator = RainAlertScheduleCoordinator()
 
 class RainAlertWorker(
     appContext: Context,
@@ -63,50 +71,63 @@ class RainAlertWorker(
 
     private suspend fun doWorkSerialized(): Result {
         val preferences = WidgetPreferences(applicationContext)
-        val clientId = BuildConfig.YAHOO_CLIENT_ID.trim()
-        if (clientId.isBlank()) {
-            RainAlertExpiryWorker.cancel(applicationContext)
-            preferences.clearRainAlert(CLIENT_ID_MISSING_MESSAGE)
-            safeUpdateAll(applicationContext)
+        if (!hasPlacedWidgets(applicationContext)) {
+            preferences.clearRainAlert()
             return Result.success()
         }
 
         val settings = preferences.currentSettings()
-        val sourceKey = rainSourceKey(settings)
-        if (sourceKey == null) {
-            RainAlertExpiryWorker.cancel(applicationContext)
+        if (!isRainAlertConfigured(settings)) {
             preferences.clearRainAlert()
             safeUpdateAll(applicationContext)
             return Result.success()
         }
 
+        val clientId = BuildConfig.YAHOO_CLIENT_ID.trim()
+        if (clientId.isBlank()) {
+            preferences.clearRainAlert(CLIENT_ID_MISSING_MESSAGE)
+            safeUpdateAll(applicationContext)
+            return Result.success()
+        }
+
+        var writeGuard = RainAlertWriteGuard(settings.rainAlertGeneration)
         return try {
-            val target = resolveRainTarget(settings, preferences)
-            if (target == null) {
-                if (rainSourceKey(preferences.currentSettings()) == sourceKey) {
+            val guardedTarget = resolveGuardedRainTarget(settings, preferences)
+            if (guardedTarget == null) {
+                if (preferences.clearRainAlertIfGuard(writeGuard, LOCATION_UNAVAILABLE_MESSAGE)) {
                     RainAlertExpiryWorker.cancel(applicationContext)
-                    preferences.clearRainAlert(LOCATION_UNAVAILABLE_MESSAGE)
+                    safeUpdateAll(applicationContext)
+                }
+                return Result.success()
+            }
+            writeGuard = guardedTarget.guard
+
+            if (settings.weatherLocationMode == WeatherLocationMode.Current && !hasLocationPermission()) {
+                if (preferences.clearRainAlertIfGuard(writeGuard, LOCATION_UNAVAILABLE_MESSAGE)) {
+                    RainAlertExpiryWorker.cancel(applicationContext)
                     safeUpdateAll(applicationContext)
                 }
                 return Result.success()
             }
 
-            val evaluatedAt = System.currentTimeMillis()
-            val points = buildRainProbePoints(target.latitude, target.longitude)
+            val points = buildRainProbePoints(guardedTarget.target.latitude, guardedTarget.target.longitude)
             val observations = withContext(Dispatchers.IO) {
                 YahooRainClient(clientId).fetch(points)
+            }
+            val evaluatedAt = System.currentTimeMillis()
+            if (!isRainObservationTimelineUsable(observations, evaluatedAt)) {
+                throw YahooRainParseException("Yahoo rain observation timestamp is stale or invalid")
             }
             val alert = evaluateRainAlert(
                 observations = observations,
                 evaluatedAtMillis = evaluatedAt,
             )
-            if (rainSourceKey(preferences.currentSettings()) != sourceKey) {
+            if (!preferences.saveRainAlert(alert, writeGuard)) {
                 return Result.success()
             }
 
-            preferences.saveRainAlert(alert)
             if (alert.isActive) {
-                RainAlertExpiryWorker.schedule(applicationContext, alert.updatedAtMillis)
+                RainAlertExpiryWorker.schedule(applicationContext, alert)
             } else {
                 RainAlertExpiryWorker.cancel(applicationContext)
             }
@@ -116,11 +137,13 @@ class RainAlertWorker(
             throw error
         } catch (error: Exception) {
             Log.w(TAG, "Yahoo rain refresh failed", error)
-            if (rainSourceKey(preferences.currentSettings()) == sourceKey) {
-                preferences.saveRainAlertError(
-                    error.message?.take(160) ?: error.javaClass.simpleName,
-                )
-                safeUpdateAll(applicationContext)
+            val savedError = preferences.saveRainAlertError(
+                error.message?.take(160) ?: error.javaClass.simpleName,
+                writeGuard,
+            )
+            if (savedError) safeUpdateAll(applicationContext)
+            if (savedError && error is YahooRainHttpException && !isTransientRainFailure(error)) {
+                cancelPolling(applicationContext)
             }
             if (shouldRetryTransientFailure(isTransientRainFailure(error), runAttemptCount)) {
                 Result.retry()
@@ -130,28 +153,54 @@ class RainAlertWorker(
         }
     }
 
-    private suspend fun resolveRainTarget(
+    private suspend fun resolveGuardedRainTarget(
         settings: WidgetSettings,
         preferences: WidgetPreferences,
-    ): RainTarget? {
+    ): GuardedRainTarget? {
         return when (settings.weatherLocationMode) {
-            WeatherLocationMode.Current -> {
-                val live = resolveLiveCurrentTarget()
-                selectRainTarget(
-                    settings = settings,
-                    currentTarget = live,
-                    now = System.currentTimeMillis(),
-                )
-            }
+            WeatherLocationMode.Current -> resolveGuardedCurrentTarget(settings, preferences)
             WeatherLocationMode.Fixed -> {
-                selectRainTarget(
+                val target = selectRainTarget(
                     settings = settings,
                     currentTarget = null,
                     now = System.currentTimeMillis(),
                 ) ?: resolveFixedRainTarget(settings, preferences)
+                target?.let {
+                    GuardedRainTarget(
+                        target = it,
+                        guard = RainAlertWriteGuard(settings.rainAlertGeneration),
+                    )
+                }
             }
             WeatherLocationMode.Disabled -> null
         }
+    }
+
+    private suspend fun resolveGuardedCurrentTarget(
+        settings: WidgetSettings,
+        preferences: WidgetPreferences,
+    ): GuardedRainTarget? {
+        if (!hasLocationPermission()) return null
+        val live = resolveLiveCurrentTarget()
+        if (!hasLocationPermission()) return null
+        val latest = preferences.currentSettings()
+        if (latest.rainAlertGeneration != settings.rainAlertGeneration) return null
+        val target = selectRainTarget(
+            settings = latest,
+            currentTarget = live,
+            now = System.currentTimeMillis(),
+            currentLocationPermissionGranted = true,
+        ) ?: return null
+        val capturedAt = target.locationAtMillis ?: return null
+        return GuardedRainTarget(
+            target = target,
+            guard = RainAlertWriteGuard(
+                expectedRainGeneration = latest.rainAlertGeneration,
+                expectedCurrentLatitude = target.latitude,
+                expectedCurrentLongitude = target.longitude,
+                expectedCurrentLocationAtMillis = capturedAt,
+            ),
+        )
     }
 
     private fun hasLocationPermission(): Boolean {
@@ -177,6 +226,7 @@ class RainAlertWorker(
                     freshLocationTimestampOrNull(
                         locationTimestampMillis = location.time,
                         nowMillis = System.currentTimeMillis(),
+                        maxAgeMillis = RAIN_CURRENT_LOCATION_MAX_AGE_MILLIS,
                     ) != null
                 }
                 lastLocation ?: run {
@@ -191,6 +241,7 @@ class RainAlertWorker(
                             freshLocationTimestampOrNull(
                                 locationTimestampMillis = current.time,
                                 nowMillis = System.currentTimeMillis(),
+                                maxAgeMillis = RAIN_CURRENT_LOCATION_MAX_AGE_MILLIS,
                             ) != null
                         }
                     } finally {
@@ -205,7 +256,7 @@ class RainAlertWorker(
             null
         } ?: return null
 
-        return RainTarget(location.latitude, location.longitude)
+        return RainTarget(location.latitude, location.longitude, location.time)
     }
 
     private suspend fun resolveFixedRainTarget(
@@ -217,7 +268,7 @@ class RainAlertWorker(
         val address = withTimeoutOrNull(GEOCODE_TIMEOUT_MILLIS) {
             geocodeLocationName(query)
         } ?: return null
-        if (rainSourceKey(preferences.currentSettings()) != rainSourceKey(settings)) return null
+        if (preferences.currentSettings().rainAlertGeneration != settings.rainAlertGeneration) return null
         return RainTarget(address.latitude, address.longitude)
     }
 
@@ -266,30 +317,68 @@ class RainAlertWorker(
         private const val LOCATION_UNAVAILABLE_MESSAGE = "雨予報用の位置情報を取得できません"
 
         suspend fun scheduleFromSettings(context: Context) {
-            val preferences = WidgetPreferences(context)
-            if (BuildConfig.YAHOO_CLIENT_ID.isBlank()) {
-                cancel(context)
-                preferences.clearRainAlert(CLIENT_ID_MISSING_MESSAGE)
-                return
-            }
-            val settings = preferences.currentSettings()
-            if (isRainAlertConfigured(settings)) {
-                schedule(context)
-            } else {
-                cancel(context)
-                preferences.clearRainAlert()
+            rainAlertScheduleCoordinator.runSerialized {
+                val preferences = WidgetPreferences(context)
+                val settings = preferences.currentSettings()
+                if (!hasPlacedWidgets(context) || !isRainAlertConfigured(settings)) {
+                    cancelInternal(context)
+                    preferences.clearRainAlert()
+                    return@runSerialized
+                }
+                if (BuildConfig.YAHOO_CLIENT_ID.isBlank()) {
+                    cancelInternal(context)
+                    preferences.clearRainAlert(CLIENT_ID_MISSING_MESSAGE)
+                    return@runSerialized
+                }
+                scheduleInternal(context)
             }
         }
 
         suspend fun enqueueImmediateIfConfigured(context: Context): Boolean {
-            scheduleFromSettings(context)
-            if (BuildConfig.YAHOO_CLIENT_ID.isBlank()) return false
-            if (!isRainAlertConfigured(WidgetPreferences(context).currentSettings())) return false
-            enqueueImmediate(context)
-            return true
+            return rainAlertScheduleCoordinator.runSerialized {
+                val preferences = WidgetPreferences(context)
+                val settings = preferences.currentSettings()
+                if (!hasPlacedWidgets(context) || !isRainAlertConfigured(settings)) {
+                    cancelInternal(context)
+                    preferences.clearRainAlert()
+                    return@runSerialized false
+                }
+                if (BuildConfig.YAHOO_CLIENT_ID.isBlank()) {
+                    cancelInternal(context)
+                    preferences.clearRainAlert(CLIENT_ID_MISSING_MESSAGE)
+                    return@runSerialized false
+                }
+                scheduleInternal(context)
+                enqueueImmediateInternal(context)
+                true
+            }
         }
 
-        fun schedule(context: Context) {
+        fun cancel(context: Context) {
+            cancelPolling(context)
+            RainAlertExpiryWorker.cancel(context)
+        }
+
+        private fun cancelPolling(context: Context) {
+            val workManager = WorkManager.getInstance(context)
+            workManager.cancelUniqueWork(UNIQUE_PERIODIC_WORK)
+            workManager.cancelUniqueWork(UNIQUE_IMMEDIATE_WORK)
+        }
+
+        suspend fun cancelAndAwait(context: Context) {
+            rainAlertScheduleCoordinator.runSerialized {
+                val preferences = WidgetPreferences(context)
+                val wasEnabled = preferences.currentSettings().rainAlertEnabled
+                withRainAlertGenerationInvalidated(
+                    wasEnabled = wasEnabled,
+                    setEnabled = { enabled -> preferences.updateRainAlertEnabled(enabled) },
+                ) {
+                    cancelInternal(context)
+                }
+            }
+        }
+
+        private suspend fun scheduleInternal(context: Context) {
             val request = PeriodicWorkRequestBuilder<RainAlertWorker>(
                 rainAlertPeriodicIntervalMinutes(),
                 TimeUnit.MINUTES,
@@ -301,27 +390,28 @@ class RainAlertWorker(
                 UNIQUE_PERIODIC_WORK,
                 ExistingPeriodicWorkPolicy.UPDATE,
                 request,
-            )
+            ).await()
         }
 
-        fun enqueueImmediate(context: Context) {
-            val request = OneTimeWorkRequestBuilder<RainAlertWorker>()
-                .setConstraints(networkConstraints())
-                .setBackoffCriteria(BackoffPolicy.LINEAR, BACKOFF_MINUTES, TimeUnit.MINUTES)
-                .build()
+        private suspend fun enqueueImmediateInternal(context: Context) {
             WorkManager.getInstance(context).enqueueUniqueWork(
                 UNIQUE_IMMEDIATE_WORK,
                 ExistingWorkPolicy.REPLACE,
-                request,
-            )
+                immediateRequest(),
+            ).await()
         }
 
-        fun cancel(context: Context) {
+        private suspend fun cancelInternal(context: Context) {
             val workManager = WorkManager.getInstance(context)
-            workManager.cancelUniqueWork(UNIQUE_PERIODIC_WORK)
-            workManager.cancelUniqueWork(UNIQUE_IMMEDIATE_WORK)
+            workManager.cancelUniqueWork(UNIQUE_PERIODIC_WORK).await()
+            workManager.cancelUniqueWork(UNIQUE_IMMEDIATE_WORK).await()
             RainAlertExpiryWorker.cancel(context)
         }
+
+        private fun immediateRequest() = OneTimeWorkRequestBuilder<RainAlertWorker>()
+            .setConstraints(networkConstraints())
+            .setBackoffCriteria(BackoffPolicy.LINEAR, BACKOFF_MINUTES, TimeUnit.MINUTES)
+            .build()
 
         private fun networkConstraints(): Constraints = Constraints.Builder()
             .setRequiredNetworkType(NetworkType.CONNECTED)
@@ -332,10 +422,16 @@ class RainAlertWorker(
 internal data class RainTarget(
     val latitude: Double,
     val longitude: Double,
+    val locationAtMillis: Long? = null,
+)
+
+internal data class GuardedRainTarget(
+    val target: RainTarget,
+    val guard: RainAlertWriteGuard,
 )
 
 internal fun isRainAlertConfigured(settings: WidgetSettings): Boolean {
-    return settings.weatherEnabled && settings.weatherLocationMode != WeatherLocationMode.Disabled
+    return settings.rainAlertEnabled && settings.weatherLocationMode != WeatherLocationMode.Disabled
 }
 
 internal fun rainSourceKey(settings: WidgetSettings): String? {
@@ -360,6 +456,7 @@ internal fun selectRainTarget(
     settings: WidgetSettings,
     currentTarget: RainTarget?,
     now: Long,
+    currentLocationPermissionGranted: Boolean = true,
 ): RainTarget? {
     if (!isRainAlertConfigured(settings)) return null
     return when (settings.weatherLocationMode) {
@@ -369,17 +466,57 @@ internal fun selectRainTarget(
             RainTarget(latitude, longitude)
         }
         WeatherLocationMode.Current -> {
-            currentTarget ?: if (settings.hasFreshCachedCurrentLocation(now)) {
+            if (!currentLocationPermissionGranted) return null
+            val cachedTarget = if (
+                settings.lastCurrentLatitude != null &&
+                settings.lastCurrentLongitude != null &&
+                freshLocationTimestampOrNull(
+                    locationTimestampMillis = settings.lastCurrentLocationAtMillis,
+                    nowMillis = now,
+                    maxAgeMillis = RAIN_CURRENT_LOCATION_MAX_AGE_MILLIS,
+                ) != null
+            ) {
                 RainTarget(
-                    latitude = settings.lastCurrentLatitude!!,
-                    longitude = settings.lastCurrentLongitude!!,
+                    latitude = settings.lastCurrentLatitude,
+                    longitude = settings.lastCurrentLongitude,
+                    locationAtMillis = settings.lastCurrentLocationAtMillis,
                 )
             } else {
                 null
             }
+            when {
+                currentTarget == null -> cachedTarget
+                cachedTarget == null -> currentTarget
+                (currentTarget.locationAtMillis ?: Long.MIN_VALUE) >=
+                    (cachedTarget.locationAtMillis ?: Long.MIN_VALUE) -> currentTarget
+                else -> cachedTarget
+            }
         }
         WeatherLocationMode.Disabled -> null
     }
+}
+
+internal fun isRainObservationTimelineUsable(
+    observations: List<RainObservation>,
+    evaluatedAtMillis: Long,
+): Boolean {
+    val centerObservationAt = observations
+        .asSequence()
+        .filter {
+            it.probeId == RAIN_CENTER_PROBE_ID &&
+                it.type == RainObservationType.Observation
+        }
+        .maxOfOrNull { it.timestampMillis }
+        ?: return false
+    val oldestAllowed = evaluatedAtMillis - RAIN_OBSERVATION_MAX_AGE_MILLIS
+    val newestAllowed = evaluatedAtMillis + RAIN_OBSERVATION_MAX_FUTURE_SKEW_MILLIS
+    return centerObservationAt in oldestAllowed..newestAllowed
+}
+
+internal fun hasPlacedWidgets(context: Context): Boolean {
+    val appWidgetManager = AppWidgetManager.getInstance(context)
+    val componentName = ComponentName(context, YWidgetReceiver::class.java)
+    return appWidgetManager.getAppWidgetIds(componentName).isNotEmpty()
 }
 
 internal fun rainAlertPeriodicIntervalMinutes(): Long = 15L
@@ -395,3 +532,7 @@ internal fun isTransientRainFailure(error: Throwable): Boolean {
         else -> false
     }
 }
+
+private const val RAIN_CURRENT_LOCATION_MAX_AGE_MILLIS = 15 * 60 * 1_000L
+private const val RAIN_OBSERVATION_MAX_AGE_MILLIS = 15 * 60 * 1_000L
+private const val RAIN_OBSERVATION_MAX_FUTURE_SKEW_MILLIS = 5 * 60 * 1_000L

@@ -30,8 +30,11 @@ data class WidgetSettings(
     val temperatureCelsius: Double? = null,
     val weatherUpdatedAtMillis: Long = 0L,
     val weatherRefreshing: Boolean = false,
+    val rainAlertEnabled: Boolean = false,
+    val rainAlertGeneration: Long = 0L,
     val rainAlertLevel: RainAlertLevel = RainAlertLevel.None,
     val rainAlertMinutesUntilRain: Int? = null,
+    val rainAlertRainAtMillis: Long? = null,
     val rainAlertRainfallMmPerHour: Double? = null,
     val rainAlertNearbyOnly: Boolean = false,
     val rainAlertUpdatedAtMillis: Long = 0L,
@@ -219,8 +222,11 @@ internal fun WidgetSettings.refreshDiagnosticSummary(): String {
         "lastRefreshMessage=$lastRefreshMessage, " +
         "newsUpdatedAt=$newsUpdatedAtMillis, " +
         "weatherUpdatedAt=$weatherUpdatedAtMillis, " +
+        "rainAlertEnabled=$rainAlertEnabled, " +
+        "rainAlertGeneration=$rainAlertGeneration, " +
         "rainAlertLevel=$rainAlertLevel, " +
         "rainAlertMinutes=$rainAlertMinutesUntilRain, " +
+        "rainAlertRainAt=$rainAlertRainAtMillis, " +
         "rainAlertRainfall=$rainAlertRainfallMmPerHour, " +
         "rainAlertNearbyOnly=$rainAlertNearbyOnly, " +
         "rainAlertUpdatedAt=$rainAlertUpdatedAtMillis, " +

@@ -57,6 +57,25 @@ class RainAlertExpiryWorkerTest {
     }
 
     @Test
+    fun watchThatHasEscalatedToImminentExpiresByImminentFreshness() {
+        val updatedAt = 1_000L
+        val settings = WidgetSettings(
+            rainAlertLevel = RainAlertLevel.Watch,
+            rainAlertMinutesUntilRain = 50,
+            rainAlertRainAtMillis = updatedAt + 50 * 60_000L,
+            rainAlertUpdatedAtMillis = updatedAt,
+        )
+
+        assertTrue(
+            shouldExpireRainAlert(
+                settings = settings,
+                expectedUpdatedAtMillis = updatedAt,
+                nowMillis = updatedAt + 40 * 60_000L,
+            ),
+        )
+    }
+
+    @Test
     fun noAlertDoesNotNeedExpiryRedraw() {
         val settings = WidgetSettings(
             rainAlertLevel = RainAlertLevel.None,
