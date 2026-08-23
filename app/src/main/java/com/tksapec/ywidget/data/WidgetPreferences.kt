@@ -344,10 +344,10 @@ class WidgetPreferences internal constructor(private val dataStore: DataStore<Pr
 
     suspend fun clearRefreshState() {
         dataStore.edit {
-            it[Keys.refreshQueued] = false
-            it[Keys.newsRefreshing] = false
-            it[Keys.weatherRefreshing] = false
-            it[Keys.refreshStartedAtMillis] = 0L
+            invalidateRefreshGeneration(it)
+            it.remove(Keys.lastRefreshFinishedAtMillis)
+            it.remove(Keys.lastRefreshResult)
+            it[Keys.lastRefreshMessage] = "状態をリセットしました"
         }
     }
 
