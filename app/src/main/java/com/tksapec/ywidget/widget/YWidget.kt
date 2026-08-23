@@ -304,34 +304,20 @@ internal fun rainAlertDisplay(settings: WidgetSettings, now: Long): RainAlertDis
     val suffix = rainfall.takeIf { it.isNotBlank() }?.let { " $it" }.orEmpty()
     val intensity = rainIntensityLabel(rainfallValue)
     val rainWording = intensity ?: "雨"
+    val timing = when {
+        minutes == null || minutes <= 0 -> "まもなく"
+        else -> "${minutes}分以内に"
+    }
     val text = when (effectiveLevel) {
         RainAlertLevel.Raining -> "☔ 現在${rainWording}が降っています$suffix"
         RainAlertLevel.Imminent,
         RainAlertLevel.Soon,
-        -> {
-            if (settings.rainAlertNearbyOnly && minutes == 0) {
-                "☔ 周辺で現在${rainWording}$suffix"
-            } else {
-                val timing = when {
-                    minutes == null -> "まもなく"
-                    minutes <= 0 -> "まもなく"
-                    else -> "${minutes}分以内"
-                }
-                if (settings.rainAlertNearbyOnly) {
-                    "☔ 周辺で${timing}に${rainWording}$suffix"
-                } else {
-                    "☔ ${timing}に${rainWording}$suffix"
-                }
-            }
+        -> if (settings.rainAlertNearbyOnly) {
+            "☔ 周辺で${timing}${rainWording}$suffix"
+        } else {
+            "☔ ${timing}${rainWording}$suffix"
         }
-        RainAlertLevel.Watch -> {
-            val timing = when {
-                minutes == null -> "60分以内"
-                minutes <= 0 -> "まもなく"
-                else -> "${minutes}分以内"
-            }
-            "☂ ${timing}に${rainWording}の可能性$suffix"
-        }
+        RainAlertLevel.Watch -> "☂ ${timing}${rainWording}の可能性$suffix"
         RainAlertLevel.None -> return null
     }
     return RainAlertDisplay(
