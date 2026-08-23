@@ -37,4 +37,33 @@ class RefreshEnqueueCoordinatorTest {
         joinAll(first, second)
         assertEquals(listOf("first-start", "first-end", "second"), events)
     }
+
+    @Test
+    fun cancellationAfterLockAcquisitionDoesNotLeaveHalfEnqueuedState() = runBlocking {
+        val coordinator = RefreshEnqueueCoordinator()
+        val events = mutableListOf<String>()
+        val firstEntered = CompletableDeferred<Unit>()
+        val releaseFirst = CompletableDeferred<Unit>()
+
+        val first = launch {
+            coordinator.runSerialized {
+                events += "first-start"
+                firstEntered.complete(Unit)
+                releaseFirst.await()
+                events += "first-end"
+            }
+        }
+        firstEntered.await()
+        first.cancel()
+        val second = launch {
+            coordinator.runSerialized {
+                events += "second"
+            }
+        }
+        yield()
+        releaseFirst.complete(Unit)
+        joinAll(first, second)
+
+        assertEquals(listOf("first-start", "first-end", "second"), events)
+    }
 }
