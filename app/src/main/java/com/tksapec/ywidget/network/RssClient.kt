@@ -74,9 +74,11 @@ class RssClient(
     private inline fun <T> HttpURLConnection.useInputStream(block: (InputStream) -> T): T {
         return try {
             if (responseCode !in 200..299) {
-                val body = runCatching {
+                val body = try {
                     errorStream?.bufferedReader()?.use { it.readText().take(240) }.orEmpty()
-                }.getOrDefault("")
+                } catch (_: Exception) {
+                    ""
+                }
                 Log.w("RssClient", "RSS HTTP $responseCode: $body")
                 throw RssHttpException(responseCode)
             }
