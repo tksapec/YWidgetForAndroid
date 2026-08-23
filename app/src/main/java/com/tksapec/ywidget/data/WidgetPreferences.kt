@@ -66,6 +66,7 @@ class WidgetPreferences internal constructor(private val dataStore: DataStore<Pr
             weatherUpdatedAtMillis = preferences[Keys.weatherUpdatedAtMillis] ?: 0L,
             weatherRefreshing = preferences[Keys.weatherRefreshing] ?: false,
             rainAlertEnabled = preferences[Keys.rainAlertEnabled] ?: false,
+            rainAlertGeneration = preferences[Keys.rainAlertGeneration] ?: 0L,
             rainAlertLevel = RainAlertLevel.fromName(preferences[Keys.rainAlertLevel]),
             rainAlertMinutesUntilRain = preferences[Keys.rainAlertMinutesUntilRain],
             rainAlertRainAtMillis = preferences[Keys.rainAlertRainAtMillis],
@@ -133,7 +134,7 @@ class WidgetPreferences internal constructor(private val dataStore: DataStore<Pr
             val changed = (it[Keys.rainAlertEnabled] ?: false) != enabled
             it[Keys.rainAlertEnabled] = enabled
             if (changed) {
-                invalidateRefreshGeneration(it)
+                invalidateRainAlertGeneration(it)
                 clearRainAlertCache(it)
             }
         }
@@ -146,6 +147,7 @@ class WidgetPreferences internal constructor(private val dataStore: DataStore<Pr
             it[Keys.weatherEnabled] = mode != WeatherLocationMode.Disabled
             if (changed) {
                 invalidateRefreshGeneration(it)
+                invalidateRainAlertGeneration(it)
                 clearWeatherCache(it)
                 clearRainAlertCache(it)
             }
@@ -164,6 +166,7 @@ class WidgetPreferences internal constructor(private val dataStore: DataStore<Pr
             it.remove(Keys.fixedLongitude)
             if (changed) {
                 invalidateRefreshGeneration(it)
+                invalidateRainAlertGeneration(it)
                 clearWeatherCache(it)
                 clearRainAlertCache(it)
             }
@@ -336,7 +339,7 @@ class WidgetPreferences internal constructor(private val dataStore: DataStore<Pr
     ): RainAlertWriteGuard? {
         var guard: RainAlertWriteGuard? = null
         dataStore.edit {
-            if (!generationMatches(it, expectedGeneration)) return@edit
+            if ((it[Keys.rainAlertGeneration] ?: 0L) != expectedGeneration) return@edit
             if (!(it[Keys.rainAlertEnabled] ?: false)) return@edit
             val storedAt = it[Keys.lastCurrentLocationAtMillis] ?: 0L
             if (storedAt > locationAtMillis) return@edit
@@ -344,7 +347,7 @@ class WidgetPreferences internal constructor(private val dataStore: DataStore<Pr
             it[Keys.lastCurrentLongitude] = longitude
             it[Keys.lastCurrentLocationAtMillis] = locationAtMillis
             guard = RainAlertWriteGuard(
-                expectedRefreshGeneration = expectedGeneration,
+                expectedRainGeneration = expectedGeneration,
                 expectedCurrentLatitude = latitude,
                 expectedCurrentLongitude = longitude,
                 expectedCurrentLocationAtMillis = locationAtMillis,
@@ -398,6 +401,7 @@ class WidgetPreferences internal constructor(private val dataStore: DataStore<Pr
         var saved = false
         dataStore.edit {
             if (guard != null && !rainGuardMatches(it, guard)) return@edit
+            if (guard != null && !(it[Keys.rainAlertEnabled] ?: false)) return@edit
             saved = true
             it[Keys.rainAlertLevel] = state.level.name
             state.minutesUntilRain?.let { minutes ->
@@ -423,6 +427,7 @@ class WidgetPreferences internal constructor(private val dataStore: DataStore<Pr
         var saved = false
         dataStore.edit {
             if (guard != null && !rainGuardMatches(it, guard)) return@edit
+            if (guard != null && !(it[Keys.rainAlertEnabled] ?: false)) return@edit
             saved = true
             it[Keys.lastRainAlertError] = message
         }
@@ -528,7 +533,7 @@ class WidgetPreferences internal constructor(private val dataStore: DataStore<Pr
     private fun rainGuardMatches(preferences: Preferences, guard: RainAlertWriteGuard): Boolean {
         if (!(preferences[Keys.rainAlertEnabled] ?: false)) return false
         return rainAlertWriteGuardMatches(
-            currentRefreshGeneration = preferences[Keys.refreshGeneration] ?: 0L,
+            currentRainGeneration = preferences[Keys.rainAlertGeneration] ?: 0L,
             currentLatitude = preferences[Keys.lastCurrentLatitude],
             currentLongitude = preferences[Keys.lastCurrentLongitude],
             currentLocationAtMillis = preferences[Keys.lastCurrentLocationAtMillis] ?: 0L,
@@ -543,6 +548,10 @@ class WidgetPreferences internal constructor(private val dataStore: DataStore<Pr
         preferences[Keys.newsRefreshing] = false
         preferences[Keys.weatherRefreshing] = false
         preferences[Keys.refreshStartedAtMillis] = 0L
+    }
+
+    private fun invalidateRainAlertGeneration(preferences: androidx.datastore.preferences.core.MutablePreferences) {
+        preferences[Keys.rainAlertGeneration] = nextGeneration(preferences[Keys.rainAlertGeneration] ?: 0L)
     }
 
     private fun clearNewsCache(preferences: androidx.datastore.preferences.core.MutablePreferences) {
@@ -611,6 +620,7 @@ class WidgetPreferences internal constructor(private val dataStore: DataStore<Pr
         val weatherUpdatedAtMillis = longPreferencesKey("weather_updated_at_millis")
         val weatherRefreshing = booleanPreferencesKey("weather_refreshing")
         val rainAlertEnabled = booleanPreferencesKey("rain_alert_enabled")
+        val rainAlertGeneration = longPreferencesKey("rain_alert_generation")
         val rainAlertLevel = stringPreferencesKey("rain_alert_level")
         val rainAlertMinutesUntilRain = intPreferencesKey("rain_alert_minutes_until_rain")
         val rainAlertRainAtMillis = longPreferencesKey("rain_alert_rain_at_millis")
