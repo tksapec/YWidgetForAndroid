@@ -77,22 +77,41 @@ class RainAlertDisplayTest {
     }
 
     @Test
-    fun storedWatchEscalatesToImminentAsRainApproaches() {
+    fun storedWatchEscalatesToImminentWhileItsEffectiveFreshnessIsStillValid() {
         val updatedAt = 10_000L
-        val rainAt = updatedAt + 50 * 60_000L
+        val rainAt = updatedAt + 35 * 60_000L
         val display = rainAlertDisplay(
             settings(
                 level = RainAlertLevel.Watch,
-                minutes = 50,
+                minutes = 35,
                 rainfall = 1.2,
                 updatedAt = updatedAt,
                 rainAt = rainAt,
             ),
-            now = rainAt - 10 * 60_000L,
+            now = updatedAt + 20 * 60_000L,
         )!!
 
         assertEquals(RainAlertLevel.Imminent, display.level)
-        assertEquals("☔ 10分以内に雨 1.2 mm/h", display.text)
+        assertEquals("☔ 15分以内に雨 1.2 mm/h", display.text)
+    }
+
+    @Test
+    fun oldWatchForecastIsHiddenAfterItEscalatesToImminent() {
+        val updatedAt = 10_000L
+        val rainAt = updatedAt + 50 * 60_000L
+
+        assertNull(
+            rainAlertDisplay(
+                settings(
+                    level = RainAlertLevel.Watch,
+                    minutes = 50,
+                    rainfall = 1.2,
+                    updatedAt = updatedAt,
+                    rainAt = rainAt,
+                ),
+                now = updatedAt + 40 * 60_000L,
+            ),
+        )
     }
 
     @Test
