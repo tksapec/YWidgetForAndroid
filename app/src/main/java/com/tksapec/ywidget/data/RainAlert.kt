@@ -61,7 +61,7 @@ data class RainAlertState(
 }
 
 internal data class RainAlertWriteGuard(
-    val expectedRefreshGeneration: Long,
+    val expectedRainGeneration: Long,
     val expectedCurrentLatitude: Double? = null,
     val expectedCurrentLongitude: Double? = null,
     val expectedCurrentLocationAtMillis: Long? = null,
@@ -73,13 +73,13 @@ internal data class RainAlertWriteGuard(
 }
 
 internal fun rainAlertWriteGuardMatches(
-    currentRefreshGeneration: Long,
+    currentRainGeneration: Long,
     currentLatitude: Double?,
     currentLongitude: Double?,
     currentLocationAtMillis: Long,
     guard: RainAlertWriteGuard,
 ): Boolean {
-    if (currentRefreshGeneration != guard.expectedRefreshGeneration) return false
+    if (currentRainGeneration != guard.expectedRainGeneration) return false
     if (!guard.tracksCurrentLocation) return true
     return currentLatitude == guard.expectedCurrentLatitude &&
         currentLongitude == guard.expectedCurrentLongitude &&
@@ -176,11 +176,7 @@ internal fun evaluateRainAlert(
             .thenBy { it.nearbyOnly },
     ) ?: return RainAlertState(RainAlertLevel.None, updatedAtMillis = evaluatedAtMillis)
 
-    val level = when {
-        candidate.minutesUntilRain <= 15 -> RainAlertLevel.Imminent
-        candidate.minutesUntilRain <= 30 -> RainAlertLevel.Soon
-        else -> RainAlertLevel.Watch
-    }
+    val level = levelForMinutes(candidate.minutesUntilRain)
     return RainAlertState(
         level = level,
         minutesUntilRain = candidate.minutesUntilRain,
@@ -189,6 +185,12 @@ internal fun evaluateRainAlert(
         nearbyOnly = candidate.nearbyOnly,
         updatedAtMillis = evaluatedAtMillis,
     )
+}
+
+internal fun levelForMinutes(minutesUntilRain: Int): RainAlertLevel = when {
+    minutesUntilRain <= 15 -> RainAlertLevel.Imminent
+    minutesUntilRain <= 30 -> RainAlertLevel.Soon
+    else -> RainAlertLevel.Watch
 }
 
 internal fun rainAlertMaxAgeMillis(level: RainAlertLevel): Long = when (level) {
