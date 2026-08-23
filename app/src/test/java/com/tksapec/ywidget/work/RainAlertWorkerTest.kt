@@ -74,6 +74,36 @@ class RainAlertWorkerTest {
     }
 
     @Test
+    fun currentTargetAcceptsCachedLocationAtFifteenMinuteBoundary() {
+        val now = 2_000_000L
+        val cachedAt = now - 15 * 60_000L
+        val settings = rainSettings(
+            weatherLocationMode = WeatherLocationMode.Current,
+            lastCurrentLatitude = 34.0,
+            lastCurrentLongitude = 134.0,
+            lastCurrentLocationAtMillis = cachedAt,
+        )
+
+        assertEquals(
+            RainTarget(34.0, 134.0, cachedAt),
+            selectRainTarget(settings, currentTarget = null, now = now),
+        )
+    }
+
+    @Test
+    fun currentTargetRejectsCachedLocationOlderThanFifteenMinutes() {
+        val now = 2_000_000L
+        val settings = rainSettings(
+            weatherLocationMode = WeatherLocationMode.Current,
+            lastCurrentLatitude = 34.0,
+            lastCurrentLongitude = 134.0,
+            lastCurrentLocationAtMillis = now - 15 * 60_000L - 1L,
+        )
+
+        assertNull(selectRainTarget(settings, currentTarget = null, now = now))
+    }
+
+    @Test
     fun currentTargetDoesNotUseCachedCoordinatesWithoutLocationPermission() {
         val settings = rainSettings(
             weatherLocationMode = WeatherLocationMode.Current,
