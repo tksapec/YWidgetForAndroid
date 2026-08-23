@@ -1,5 +1,6 @@
 package com.tksapec.ywidget.data
 
+import kotlin.math.ceil
 import kotlin.math.cos
 import kotlin.math.sqrt
 
@@ -9,6 +10,11 @@ internal const val RAIN_ALERT_RADIUS_KM: Double = 3.0
 internal const val RAIN_CENTER_FORECAST_HORIZON_MINUTES: Int = 60
 internal const val RAIN_NEARBY_FORECAST_HORIZON_MINUTES: Int = 30
 internal const val RAIN_ALERT_MAX_AGE_MILLIS: Long = 45 * 60 * 1_000L
+internal const val RAINING_ALERT_MAX_AGE_MILLIS: Long = 15 * 60 * 1_000L
+internal const val IMMINENT_ALERT_MAX_AGE_MILLIS: Long = 20 * 60 * 1_000L
+internal const val SOON_ALERT_MAX_AGE_MILLIS: Long = 30 * 60 * 1_000L
+internal const val HEAVY_RAIN_THRESHOLD_MM_PER_HOUR: Double = 10.0
+internal const val MODERATE_RAIN_THRESHOLD_MM_PER_HOUR: Double = 2.0
 
 enum class RainAlertLevel {
     None,
@@ -45,12 +51,39 @@ internal data class RainObservation(
 data class RainAlertState(
     val level: RainAlertLevel,
     val minutesUntilRain: Int? = null,
+    val rainAtMillis: Long? = null,
     val rainfallMmPerHour: Double? = null,
     val nearbyOnly: Boolean = false,
     val updatedAtMillis: Long,
 ) {
     val isActive: Boolean
         get() = level != RainAlertLevel.None
+}
+
+internal data class RainAlertWriteGuard(
+    val expectedRefreshGeneration: Long,
+    val expectedCurrentLatitude: Double? = null,
+    val expectedCurrentLongitude: Double? = null,
+    val expectedCurrentLocationAtMillis: Long? = null,
+) {
+    val tracksCurrentLocation: Boolean
+        get() = expectedCurrentLatitude != null &&
+            expectedCurrentLongitude != null &&
+            expectedCurrentLocationAtMillis != null
+}
+
+internal fun rainAlertWriteGuardMatches(
+    currentRefreshGeneration: Long,
+    currentLatitude: Double?,
+    currentLongitude: Double?,
+    currentLocationAtMillis: Long,
+    guard: RainAlertWriteGuard,
+): Boolean {
+    if (currentRefreshGeneration != guard.expectedRefreshGeneration) return false
+    if (!guard.tracksCurrentLocation) return true
+    return currentLatitude == guard.expectedCurrentLatitude &&
+        currentLongitude == guard.expectedCurrentLongitude &&
+        currentLocationAtMillis == guard.expectedCurrentLocationAtMillis
 }
 
 internal fun buildRainProbePoints(
@@ -92,7 +125,6 @@ internal fun evaluateRainAlert(
     val baseTimestamp = observations
         .filter { it.probeId == RAIN_CENTER_PROBE_ID && it.type == RainObservationType.Observation }
         .maxOfOrNull { it.timestampMillis }
-        ?: observations.minOfOrNull { it.timestampMillis }
         ?: return RainAlertState(RainAlertLevel.None, updatedAtMillis = evaluatedAtMillis)
 
     val currentCenter = observations
@@ -107,6 +139,7 @@ internal fun evaluateRainAlert(
         return RainAlertState(
             level = RainAlertLevel.Raining,
             minutesUntilRain = 0,
+            rainAtMillis = baseTimestamp,
             rainfallMmPerHour = currentCenter.rainfallMmPerHour,
             nearbyOnly = false,
             updatedAtMillis = evaluatedAtMillis,
@@ -132,6 +165,7 @@ internal fun evaluateRainAlert(
 
         RainCandidate(
             minutesUntilRain = minutes,
+            rainAtMillis = observation.timestampMillis,
             rainfallMmPerHour = observation.rainfallMmPerHour,
             nearbyOnly = nearbyOnly,
         )
@@ -150,22 +184,50 @@ internal fun evaluateRainAlert(
     return RainAlertState(
         level = level,
         minutesUntilRain = candidate.minutesUntilRain,
+        rainAtMillis = candidate.rainAtMillis,
         rainfallMmPerHour = candidate.rainfallMmPerHour,
         nearbyOnly = candidate.nearbyOnly,
         updatedAtMillis = evaluatedAtMillis,
     )
 }
 
-internal fun isRainAlertFresh(updatedAtMillis: Long, nowMillis: Long): Boolean {
-    return isTimestampFresh(
+internal fun rainAlertMaxAgeMillis(level: RainAlertLevel): Long = when (level) {
+    RainAlertLevel.Raining -> RAINING_ALERT_MAX_AGE_MILLIS
+    RainAlertLevel.Imminent -> IMMINENT_ALERT_MAX_AGE_MILLIS
+    RainAlertLevel.Soon -> SOON_ALERT_MAX_AGE_MILLIS
+    RainAlertLevel.Watch -> RAIN_ALERT_MAX_AGE_MILLIS
+    RainAlertLevel.None -> 0L
+}
+
+internal fun isRainAlertFresh(
+    level: RainAlertLevel,
+    updatedAtMillis: Long,
+    nowMillis: Long,
+): Boolean {
+    val maxAgeMillis = rainAlertMaxAgeMillis(level)
+    return maxAgeMillis > 0L && isTimestampFresh(
         timestampMillis = updatedAtMillis,
         nowMillis = nowMillis,
-        maxAgeMillis = RAIN_ALERT_MAX_AGE_MILLIS,
+        maxAgeMillis = maxAgeMillis,
     )
+}
+
+internal fun remainingRainMinutes(rainAtMillis: Long?, nowMillis: Long): Int? {
+    val rainAt = rainAtMillis ?: return null
+    if (rainAt <= nowMillis) return 0
+    return ceil((rainAt - nowMillis) / 60_000.0).toInt()
+}
+
+internal fun rainIntensityLabel(rainfallMmPerHour: Double?): String? = when {
+    rainfallMmPerHour == null -> null
+    rainfallMmPerHour >= HEAVY_RAIN_THRESHOLD_MM_PER_HOUR -> "強い雨"
+    rainfallMmPerHour >= MODERATE_RAIN_THRESHOLD_MM_PER_HOUR -> "やや強い雨"
+    else -> null
 }
 
 private data class RainCandidate(
     val minutesUntilRain: Int,
+    val rainAtMillis: Long,
     val rainfallMmPerHour: Double,
     val nearbyOnly: Boolean,
 )
