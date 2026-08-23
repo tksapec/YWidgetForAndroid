@@ -2,6 +2,7 @@ package com.tksapec.ywidget.data
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -45,6 +46,7 @@ class RainAlertTest {
 
         assertEquals(RainAlertLevel.Raining, state.level)
         assertEquals(0, state.minutesUntilRain)
+        assertEquals(BASE_TIME, state.rainAtMillis)
         assertEquals(0.5, state.rainfallMmPerHour!!, 0.0001)
         assertFalse(state.nearbyOnly)
     }
@@ -58,6 +60,7 @@ class RainAlertTest {
 
         assertEquals(RainAlertLevel.Imminent, state.level)
         assertEquals(15, state.minutesUntilRain)
+        assertEquals(BASE_TIME + 15 * 60_000L, state.rainAtMillis)
         assertFalse(state.nearbyOnly)
     }
 
@@ -128,9 +131,58 @@ class RainAlertTest {
     }
 
     @Test
-    fun alertFreshnessExpiresAfterFortyFiveMinutes() {
-        assertTrue(isRainAlertFresh(updatedAtMillis = 1_000L, nowMillis = 1_000L + RAIN_ALERT_MAX_AGE_MILLIS))
-        assertFalse(isRainAlertFresh(updatedAtMillis = 1_000L, nowMillis = 1_001L + RAIN_ALERT_MAX_AGE_MILLIS))
+    fun centerObservationIsRequiredForEvaluation() {
+        val state = evaluateRainAlert(
+            observations = listOf(obs("w", RainObservationType.Forecast, 10, 2.0)),
+            evaluatedAtMillis = 10_000L,
+        )
+
+        assertEquals(RainAlertLevel.None, state.level)
+    }
+
+    @Test
+    fun rainingAlertExpiresAfterFifteenMinutes() {
+        assertTrue(
+            isRainAlertFresh(
+                RainAlertLevel.Raining,
+                updatedAtMillis = 1_000L,
+                nowMillis = 1_000L + RAINING_ALERT_MAX_AGE_MILLIS,
+            ),
+        )
+        assertFalse(
+            isRainAlertFresh(
+                RainAlertLevel.Raining,
+                updatedAtMillis = 1_000L,
+                nowMillis = 1_001L + RAINING_ALERT_MAX_AGE_MILLIS,
+            ),
+        )
+    }
+
+    @Test
+    fun watchAlertCanRemainFreshForFortyFiveMinutes() {
+        assertTrue(
+            isRainAlertFresh(
+                RainAlertLevel.Watch,
+                updatedAtMillis = 1_000L,
+                nowMillis = 1_000L + RAIN_ALERT_MAX_AGE_MILLIS,
+            ),
+        )
+    }
+
+    @Test
+    fun remainingMinutesAreRecomputedFromAbsoluteRainTime() {
+        val rainAt = 20 * 60_000L
+        assertEquals(10, remainingRainMinutes(rainAt, nowMillis = 10 * 60_000L))
+        assertEquals(1, remainingRainMinutes(rainAt, nowMillis = rainAt - 1L))
+        assertEquals(0, remainingRainMinutes(rainAt, nowMillis = rainAt + 1L))
+        assertNull(remainingRainMinutes(null, nowMillis = 0L))
+    }
+
+    @Test
+    fun intensityLabelsOnlyCallOutMeaningfulRain() {
+        assertNull(rainIntensityLabel(0.8))
+        assertEquals("やや強い雨", rainIntensityLabel(2.0))
+        assertEquals("強い雨", rainIntensityLabel(10.0))
     }
 
     private fun centerForecast(minutes: Int, rainfall: Double): List<RainObservation> = listOf(
