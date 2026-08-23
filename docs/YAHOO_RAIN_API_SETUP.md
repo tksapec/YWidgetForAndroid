@@ -27,29 +27,9 @@ Current-location mode requires the Android foreground location permission at the
 
 ## Client ID configuration
 
-The Client ID is intentionally not stored in this public repository. Configure it at build time with one of the following methods.
+The Yahoo Client ID is embedded directly in `app/build.gradle.kts` and exposed to application code as `BuildConfig.YAHOO_CLIENT_ID`.
 
-### Option 1: user Gradle properties (recommended for Android Studio)
-
-Add this line to your user-level Gradle properties file (`~/.gradle/gradle.properties` on macOS/Linux or `%USERPROFILE%\.gradle\gradle.properties` on Windows):
-
-```properties
-YAHOO_CLIENT_ID=your_client_id_here
-```
-
-### Option 2: command-line project property
-
-```text
-./gradlew assembleDebug -PYAHOO_CLIENT_ID=your_client_id_here
-```
-
-### Option 3: environment variable
-
-Set `YAHOO_CLIENT_ID` in the build environment before invoking Gradle.
-
-If no Client ID is configured, the application continues to build and the existing news/weather features continue to work. No Yahoo rain polling is scheduled while the rain feature is disabled. If the user enables the rain feature in a build without a Client ID, the settings diagnostics report `Yahoo Client ID未設定` and the rain worker remains stopped.
-
-Use a Client ID registered for this application. Do not commit the Client ID to source control; a client-side application cannot make the identifier truly secret, but keeping it outside the public repository reduces accidental reuse and quota consumption.
+No Gradle property or environment-variable setup is required for local builds. Because this repository is public and an Android APK can also be inspected, the embedded Client ID must be treated as publicly observable. If the Client ID is replaced or revoked, update the `buildConfigField` value in `app/build.gradle.kts` and rebuild the application.
 
 ## API quota and release planning
 
