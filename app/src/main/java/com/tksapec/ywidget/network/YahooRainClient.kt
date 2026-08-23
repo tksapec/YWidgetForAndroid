@@ -139,11 +139,9 @@ internal class YahooRainClient(private val clientId: String) {
         }
 
         val expectedProbeIds = points.map { it.id }.toSet()
-        if (usedProbeIds != expectedProbeIds) {
-            throw YahooRainParseException("Yahoo rain response is missing requested coordinates")
-        }
-        if (observations.isEmpty()) {
-            throw YahooRainParseException("Yahoo rain response contains no rainfall observations")
+        val usableProbeIds = observations.map { it.probeId }.toSet()
+        if (usableProbeIds != expectedProbeIds) {
+            throw YahooRainParseException("Yahoo rain response is missing usable weather for requested coordinates")
         }
         val hasCenterObservation = observations.any {
             it.probeId == RAIN_CENTER_PROBE_ID && it.type == RainObservationType.Observation
