@@ -1,5 +1,8 @@
 package com.tksapec.ywidget.work
 
+import com.tksapec.ywidget.data.RAIN_CENTER_PROBE_ID
+import com.tksapec.ywidget.data.RainObservation
+import com.tksapec.ywidget.data.RainObservationType
 import com.tksapec.ywidget.data.WeatherLocationMode
 import com.tksapec.ywidget.data.WidgetSettings
 import com.tksapec.ywidget.network.YahooRainHttpException
@@ -103,6 +106,39 @@ class RainAlertWorkerTest {
     }
 
     @Test
+    fun currentCenterObservationTimelineIsAccepted() {
+        val now = 1_000_000L
+        assertTrue(
+            isRainObservationTimelineUsable(
+                observations = listOf(centerObservation(now - 5 * 60_000L)),
+                evaluatedAtMillis = now,
+            ),
+        )
+    }
+
+    @Test
+    fun staleCenterObservationTimelineIsRejected() {
+        val now = 1_000_000L
+        assertFalse(
+            isRainObservationTimelineUsable(
+                observations = listOf(centerObservation(now - 16 * 60_000L)),
+                evaluatedAtMillis = now,
+            ),
+        )
+    }
+
+    @Test
+    fun implausiblyFutureCenterObservationTimelineIsRejected() {
+        val now = 1_000_000L
+        assertFalse(
+            isRainObservationTimelineUsable(
+                observations = listOf(centerObservation(now + 6 * 60_000L)),
+                evaluatedAtMillis = now,
+            ),
+        )
+    }
+
+    @Test
     fun retryPolicyRetriesTimeoutAndServerErrorsButNotBadRequestOrParseErrors() {
         assertTrue(isTransientRainFailure(SocketTimeoutException()))
         assertTrue(isTransientRainFailure(YahooRainHttpException(503)))
@@ -110,6 +146,13 @@ class RainAlertWorkerTest {
         assertFalse(isTransientRainFailure(YahooRainHttpException(400)))
         assertFalse(isTransientRainFailure(YahooRainParseException("bad json")))
     }
+
+    private fun centerObservation(timestampMillis: Long) = RainObservation(
+        probeId = RAIN_CENTER_PROBE_ID,
+        type = RainObservationType.Observation,
+        timestampMillis = timestampMillis,
+        rainfallMmPerHour = 0.0,
+    )
 
     private fun rainSettings(
         weatherLocationMode: WeatherLocationMode,
