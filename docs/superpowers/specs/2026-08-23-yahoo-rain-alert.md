@@ -20,6 +20,7 @@ Add an opt-in rain alert to the existing Android home-screen widget using Yahoo!
 - Recompute the remaining minutes from the absolute forecast timestamp whenever the widget redraws. Escalate `Watch`/`Soon` display severity as the forecast time approaches.
 - Apply freshness to the effective display level, not only the level stored when the response was first fetched.
 - Do not keep a forecast alert more than 5 minutes past its predicted timestamp without a new fetch. This limit does not replace the separate `Raining` observation freshness rule.
+- Anchor `Raining` freshness to the Yahoo center observation timestamp, capped at the later fetch time for small future clock skew, so fetching an old observation cannot extend "currently raining" for another full freshness window.
 - Highlight rainfall of 2 mm/h or more in the wording and 10 mm/h or more with the strongest banner treatment.
 - When only surrounding points trigger the alert, label it as nearby rain rather than claiming rain will definitely reach the center.
 - Do not call a surrounding forecast "currently raining" merely because its predicted timestamp has arrived; only center observation data can produce the `Raining` state.
@@ -38,6 +39,7 @@ Add an opt-in rain alert to the existing Android home-screen widget using Yahoo!
 - In current-location mode, capture latitude, longitude, and location timestamp as part of the write guard. Reject a result if the normal weather path obtained a newer current-location snapshot while the Yahoo request was in flight.
 - The rain worker must not overwrite the normal weather current-location cache merely to establish ownership; this avoids pairing newer coordinates with an older reverse-geocoded label.
 - Never use a separate "check then save" sequence for rain result ownership.
+- A stale worker whose result no longer owns the current generation must not cancel newly scheduled rain work.
 
 ## Yahoo API integration
 - Endpoint: `https://map.yahooapis.jp/weather/V1/place`
@@ -47,12 +49,13 @@ Add an opt-in rain alert to the existing Android home-screen widget using Yahoo!
 - `coordinates` is longitude,latitude and supports up to 10 points separated by spaces.
 - Client ID must not be committed to the public repository. Resolve it at build time from Gradle property or environment variable `YAHOO_CLIENT_ID`.
 - A blank Client ID does not affect existing news/weather behavior. It becomes a rain diagnostic error only after the user explicitly enables the rain feature.
-- Validate returned Feature coordinates against requested probes with a bounded tolerance, reject duplicate Features for the same probe, and require the center observation.
-- Reject responses whose latest center observation is more than 15 minutes old or more than 5 minutes ahead of the local evaluation time.
+- Validate returned Feature coordinates against requested probes with a bounded tolerance and reject duplicate Features for the same probe.
+- Require recognized observation/forecast weather data for every requested probe; a partial response must be treated as an error rather than as "no rain".
+- Require a center observation and reject responses whose latest center observation is more than 15 minutes old or more than 5 minutes ahead of the local evaluation time.
 
 ## Location and power behavior
-- Reuse a recent cached current location where possible only while location permission remains granted.
-- If the user revokes location permission, current-location rain checks must not send previously cached coordinates to Yahoo.
+- Reuse a current-location cache for rain checks only while location permission remains granted and the cached location is no more than 15 minutes old.
+- Re-check location permission after location resolution and again immediately before sending current-location coordinates to Yahoo; if permission has been revoked, do not send the cached/resolved coordinates.
 - If current-location mode is selected and the cache is stale, attempt a balanced-power fused location lookup without adding background-location permission.
 - Prefer the newer of a fresh live location and a fresh normal-weather cached location, without modifying the normal weather cache from the rain worker.
 - Fixed-location mode reuses already-resolved fixed coordinates or resolves the configured place name if necessary.
@@ -63,14 +66,14 @@ Add an opt-in rain alert to the existing Android home-screen widget using Yahoo!
 Add unit/regression tests for:
 - 9-point coordinate generation and center-first ordering.
 - Yahoo JSON parsing, including multiple Features.
-- unexpected/distant Feature coordinates, duplicate Feature mapping, and missing center observation.
+- unexpected/distant Feature coordinates, duplicate Feature mapping, incomplete probe responses, and missing center observation.
 - stale and implausibly future center-observation timestamps.
 - threshold behavior at 0.5 mm/h.
-- center current rain, 15/30/60-minute center forecast levels.
+- center current rain, observation-time freshness, and 15/30/60-minute center forecast levels.
 - nearby-only 30-minute alert behavior without treating a forecast as a current observation.
 - absolute forecast time countdown, display-level escalation, and the 5-minute post-forecast cap.
 - level-specific stale alert expiration.
 - explicit opt-in default and rain generation independence from normal refresh generation.
 - fixed-region and current-location in-flight result ownership races.
-- location permission revocation and newest-current-location selection.
+- location permission revocation, 15-minute rain-location cache limit, and newest-current-location selection.
 - retry classification and WorkManager interval policy where practical without instrumentation.
