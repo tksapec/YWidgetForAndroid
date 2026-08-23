@@ -15,6 +15,8 @@ internal const val IMMINENT_ALERT_MAX_AGE_MILLIS: Long = 20 * 60 * 1_000L
 internal const val SOON_ALERT_MAX_AGE_MILLIS: Long = 30 * 60 * 1_000L
 internal const val HEAVY_RAIN_THRESHOLD_MM_PER_HOUR: Double = 10.0
 internal const val MODERATE_RAIN_THRESHOLD_MM_PER_HOUR: Double = 2.0
+private const val MINUTE_MILLIS: Long = 60_000L
+private const val RAIN_ALERT_EXPIRY_GRACE_MILLIS: Long = 1_000L
 
 enum class RainAlertLevel {
     None,
@@ -152,7 +154,7 @@ internal fun evaluateRainAlert(
             return@mapNotNull null
         }
 
-        val minutes = ((observation.timestampMillis - baseTimestamp) / 60_000L).toInt()
+        val minutes = ((observation.timestampMillis - baseTimestamp) / MINUTE_MILLIS).toInt()
         if (minutes < 0) return@mapNotNull null
 
         val nearbyOnly = observation.probeId != RAIN_CENTER_PROBE_ID
@@ -217,7 +219,73 @@ internal fun isRainAlertFresh(
 internal fun remainingRainMinutes(rainAtMillis: Long?, nowMillis: Long): Int? {
     val rainAt = rainAtMillis ?: return null
     if (rainAt <= nowMillis) return 0
-    return ceil((rainAt - nowMillis) / 60_000.0).toInt()
+    return ceil((rainAt - nowMillis) / MINUTE_MILLIS.toDouble()).toInt()
+}
+
+internal fun effectiveRainAlertLevel(
+    storedLevel: RainAlertLevel,
+    rainAtMillis: Long?,
+    fallbackMinutesUntilRain: Int?,
+    nowMillis: Long,
+): RainAlertLevel {
+    if (storedLevel == RainAlertLevel.None || storedLevel == RainAlertLevel.Raining) return storedLevel
+    val minutes = remainingRainMinutes(rainAtMillis, nowMillis) ?: fallbackMinutesUntilRain
+    return minutes?.let(::levelForMinutes) ?: storedLevel
+}
+
+internal fun isEffectiveRainAlertFresh(
+    storedLevel: RainAlertLevel,
+    updatedAtMillis: Long,
+    rainAtMillis: Long?,
+    fallbackMinutesUntilRain: Int?,
+    nowMillis: Long,
+): Boolean {
+    val effectiveLevel = effectiveRainAlertLevel(
+        storedLevel = storedLevel,
+        rainAtMillis = rainAtMillis,
+        fallbackMinutesUntilRain = fallbackMinutesUntilRain,
+        nowMillis = nowMillis,
+    )
+    return isRainAlertFresh(effectiveLevel, updatedAtMillis, nowMillis)
+}
+
+internal fun rainAlertExpiryAtMillis(alert: RainAlertState): Long? {
+    if (!alert.isActive || alert.updatedAtMillis <= 0L) return null
+    val updatedAt = alert.updatedAtMillis
+    if (alert.level == RainAlertLevel.Raining) {
+        return updatedAt + RAINING_ALERT_MAX_AGE_MILLIS + RAIN_ALERT_EXPIRY_GRACE_MILLIS
+    }
+
+    val rainAt = alert.rainAtMillis ?: run {
+        val maxAge = rainAlertMaxAgeMillis(alert.level)
+        return if (maxAge > 0L) updatedAt + maxAge + RAIN_ALERT_EXPIRY_GRACE_MILLIS else null
+    }
+    val levelAtUpdate = effectiveRainAlertLevel(
+        storedLevel = alert.level,
+        rainAtMillis = rainAt,
+        fallbackMinutesUntilRain = alert.minutesUntilRain,
+        nowMillis = updatedAt,
+    )
+    val soonStart = maxOf(updatedAt, rainAt - 30L * MINUTE_MILLIS)
+    val imminentStart = maxOf(updatedAt, rainAt - 15L * MINUTE_MILLIS)
+    val candidates = mutableListOf<Long>()
+
+    if (levelAtUpdate == RainAlertLevel.Watch) {
+        val watchExpiry = updatedAt + RAIN_ALERT_MAX_AGE_MILLIS + RAIN_ALERT_EXPIRY_GRACE_MILLIS
+        if (watchExpiry < soonStart) candidates += watchExpiry
+    }
+    if (levelAtUpdate == RainAlertLevel.Watch || levelAtUpdate == RainAlertLevel.Soon) {
+        val soonExpiry = maxOf(
+            soonStart,
+            updatedAt + SOON_ALERT_MAX_AGE_MILLIS + RAIN_ALERT_EXPIRY_GRACE_MILLIS,
+        )
+        if (soonExpiry < imminentStart) candidates += soonExpiry
+    }
+    candidates += maxOf(
+        imminentStart,
+        updatedAt + IMMINENT_ALERT_MAX_AGE_MILLIS + RAIN_ALERT_EXPIRY_GRACE_MILLIS,
+    )
+    return candidates.minOrNull()
 }
 
 internal fun rainIntensityLabel(rainfallMmPerHour: Double?): String? = when {
