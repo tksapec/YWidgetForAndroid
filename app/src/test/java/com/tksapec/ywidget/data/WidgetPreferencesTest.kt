@@ -107,13 +107,21 @@ class WidgetPreferencesTest {
     }
 
     @Test
-    fun changingWeatherModeClearsMismatchedWeatherCache() = withPreferences { preferences ->
+    fun changingWeatherModeClearsMismatchedWeatherAndRainCache() = withPreferences { preferences ->
         preferences.updateWeatherLocationMode(WeatherLocationMode.Fixed)
         preferences.saveWeather(
             code = 1,
             temperatureCelsius = 24.0,
             locationLabel = "東京",
             updatedAtMillis = 1_000L,
+        )
+        preferences.saveRainAlert(
+            RainAlertState(
+                level = RainAlertLevel.Soon,
+                minutesUntilRain = 20,
+                rainfallMmPerHour = 1.2,
+                updatedAtMillis = 1_000L,
+            ),
         )
 
         preferences.updateWeatherLocationMode(WeatherLocationMode.Current)
@@ -123,6 +131,8 @@ class WidgetPreferencesTest {
         assertNull(settings.temperatureCelsius)
         assertNull(settings.locationLabel)
         assertEquals(0L, settings.weatherUpdatedAtMillis)
+        assertEquals(RainAlertLevel.None, settings.rainAlertLevel)
+        assertEquals(0L, settings.rainAlertUpdatedAtMillis)
     }
 
     @Test
@@ -141,6 +151,70 @@ class WidgetPreferencesTest {
         )
 
         assertNull(preferences.currentSettings().locationLabel)
+    }
+
+    @Test
+    fun saveRainAlertPersistsDerivedStateAndClearsError() = withPreferences { preferences ->
+        preferences.saveRainAlertError("temporary")
+
+        preferences.saveRainAlert(
+            RainAlertState(
+                level = RainAlertLevel.Imminent,
+                minutesUntilRain = 10,
+                rainfallMmPerHour = 2.5,
+                nearbyOnly = true,
+                updatedAtMillis = 5_000L,
+            ),
+        )
+
+        val settings = preferences.currentSettings()
+        assertEquals(RainAlertLevel.Imminent, settings.rainAlertLevel)
+        assertEquals(10, settings.rainAlertMinutesUntilRain)
+        assertEquals(2.5, settings.rainAlertRainfallMmPerHour!!, 0.0001)
+        assertTrue(settings.rainAlertNearbyOnly)
+        assertEquals(5_000L, settings.rainAlertUpdatedAtMillis)
+        assertNull(settings.lastRainAlertError)
+    }
+
+    @Test
+    fun saveRainAlertErrorKeepsFreshAlertForTemporaryFailure() = withPreferences { preferences ->
+        preferences.saveRainAlert(
+            RainAlertState(
+                level = RainAlertLevel.Watch,
+                minutesUntilRain = 50,
+                rainfallMmPerHour = 0.8,
+                updatedAtMillis = 5_000L,
+            ),
+        )
+
+        preferences.saveRainAlertError("network")
+
+        val settings = preferences.currentSettings()
+        assertEquals(RainAlertLevel.Watch, settings.rainAlertLevel)
+        assertEquals(5_000L, settings.rainAlertUpdatedAtMillis)
+        assertEquals("network", settings.lastRainAlertError)
+    }
+
+    @Test
+    fun clearRainAlertRemovesWarningButCanStoreDiagnostic() = withPreferences { preferences ->
+        preferences.saveRainAlert(
+            RainAlertState(
+                level = RainAlertLevel.Raining,
+                minutesUntilRain = 0,
+                rainfallMmPerHour = 3.0,
+                updatedAtMillis = 5_000L,
+            ),
+        )
+
+        preferences.clearRainAlert("location unavailable")
+
+        val settings = preferences.currentSettings()
+        assertEquals(RainAlertLevel.None, settings.rainAlertLevel)
+        assertNull(settings.rainAlertMinutesUntilRain)
+        assertNull(settings.rainAlertRainfallMmPerHour)
+        assertFalse(settings.rainAlertNearbyOnly)
+        assertEquals(0L, settings.rainAlertUpdatedAtMillis)
+        assertEquals("location unavailable", settings.lastRainAlertError)
     }
 
     private fun withPreferences(block: suspend (WidgetPreferences) -> Unit) = runBlocking {
