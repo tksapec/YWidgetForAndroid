@@ -83,9 +83,12 @@ internal fun rainAlertWriteGuardMatches(
 ): Boolean {
     if (currentRainGeneration != guard.expectedRainGeneration) return false
     if (!guard.tracksCurrentLocation) return true
+
+    val capturedAt = guard.expectedCurrentLocationAtMillis!!
+    if (currentLocationAtMillis > capturedAt) return false
+    if (currentLocationAtMillis < capturedAt) return true
     return currentLatitude == guard.expectedCurrentLatitude &&
-        currentLongitude == guard.expectedCurrentLongitude &&
-        currentLocationAtMillis == guard.expectedCurrentLocationAtMillis
+        currentLongitude == guard.expectedCurrentLongitude
 }
 
 internal fun buildRainProbePoints(
