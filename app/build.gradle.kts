@@ -5,13 +5,6 @@ plugins {
     id("org.jetbrains.kotlin.plugin.serialization")
 }
 
-val yahooClientId = providers.gradleProperty("YAHOO_CLIENT_ID")
-    .orElse(providers.environmentVariable("YAHOO_CLIENT_ID"))
-    .orElse("")
-    .get()
-    .replace("\\", "\\\\")
-    .replace("\"", "\\\"")
-
 android {
     namespace = "com.tksapec.ywidget"
     compileSdk = 35
@@ -22,7 +15,11 @@ android {
         targetSdk = 35
         versionCode = 3
         versionName = "1.2"
-        buildConfigField("String", "YAHOO_CLIENT_ID", "\"$yahooClientId\"")
+        buildConfigField(
+            "String",
+            "YAHOO_CLIENT_ID",
+            "\"dj00aiZpPXZnOURDeHNnY0oxZSZzPWNvbnN1bWVyc2VjcmV0Jng9NWI-\"",
+        )
     }
 
     buildFeatures {
