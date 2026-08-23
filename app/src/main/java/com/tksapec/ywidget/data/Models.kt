@@ -30,6 +30,12 @@ data class WidgetSettings(
     val temperatureCelsius: Double? = null,
     val weatherUpdatedAtMillis: Long = 0L,
     val weatherRefreshing: Boolean = false,
+    val rainAlertLevel: RainAlertLevel = RainAlertLevel.None,
+    val rainAlertMinutesUntilRain: Int? = null,
+    val rainAlertRainfallMmPerHour: Double? = null,
+    val rainAlertNearbyOnly: Boolean = false,
+    val rainAlertUpdatedAtMillis: Long = 0L,
+    val lastRainAlertError: String? = null,
     val lastNewsError: String? = null,
     val lastWeatherError: String? = null,
     val lastRefreshStartedAtMillis: Long = 0L,
@@ -132,10 +138,16 @@ fun summarizeNewsFetchResults(results: List<Result<List<NewsItem>>>): NewsFetchS
 
 fun WidgetSettings.isRefreshDue(now: Long): Boolean {
     val intervalMillis = updateIntervalMinutes.coerceAtLeast(1L) * 60_000L
-    val newsDue = newsUpdatedAtMillis <= 0L || now - newsUpdatedAtMillis >= intervalMillis
+    val newsDue = newsUpdatedAtMillis <= 0L ||
+        newsUpdatedAtMillis > now ||
+        now - newsUpdatedAtMillis >= intervalMillis
     val weatherDue = weatherEnabled &&
         weatherLocationMode != WeatherLocationMode.Disabled &&
-        (weatherUpdatedAtMillis <= 0L || now - weatherUpdatedAtMillis >= intervalMillis)
+        (
+            weatherUpdatedAtMillis <= 0L ||
+                weatherUpdatedAtMillis > now ||
+                now - weatherUpdatedAtMillis >= intervalMillis
+            )
     return newsDue || weatherDue
 }
 
@@ -207,12 +219,18 @@ internal fun WidgetSettings.refreshDiagnosticSummary(): String {
         "lastRefreshMessage=$lastRefreshMessage, " +
         "newsUpdatedAt=$newsUpdatedAtMillis, " +
         "weatherUpdatedAt=$weatherUpdatedAtMillis, " +
+        "rainAlertLevel=$rainAlertLevel, " +
+        "rainAlertMinutes=$rainAlertMinutesUntilRain, " +
+        "rainAlertRainfall=$rainAlertRainfallMmPerHour, " +
+        "rainAlertNearbyOnly=$rainAlertNearbyOnly, " +
+        "rainAlertUpdatedAt=$rainAlertUpdatedAtMillis, " +
         "newsSize=${news.size}, " +
         "weatherCode=$weatherCode, " +
         "temperature=$temperatureCelsius, " +
         "lastCurrentLocationAt=$lastCurrentLocationAtMillis, " +
         "lastNewsError=$lastNewsError, " +
         "lastWeatherError=$lastWeatherError, " +
+        "lastRainAlertError=$lastRainAlertError, " +
         "lastWidgetUpdatedAt=$lastWidgetUpdatedAtMillis, " +
         "lastWidgetUpdateError=$lastWidgetUpdateError"
 }
