@@ -14,7 +14,16 @@ When the user explicitly enables `Yahoo!雨予報` in the settings screen:
 - disabling the rain-alert option stops the periodic and immediate rain work and clears the active rain banner;
 - changing location invalidates any in-flight result for the previous location before it can be stored.
 
-Current-location mode uses Android's foreground location permission plus a recent location cache. Background location permission is intentionally not requested. Depending on Android/device state, a fresh current location may therefore be unavailable; fixed-location mode is the more predictable choice for unattended operation.
+Current-location mode requires the Android foreground location permission at the time of each rain lookup. Rain polling never sends a previously cached current-location coordinate after that permission has been revoked. A current-location cache is accepted for rain lookup only while it is at most 15 minutes old. Background location permission is intentionally not requested, so fixed-location mode remains the more predictable choice for unattended operation.
+
+## Rain-data freshness and validation
+
+- The API request contains the center plus all 8 surrounding probe coordinates in one request.
+- A response is accepted only when usable weather data is returned for every requested probe; partial/mismatched/duplicate coordinate responses are treated as errors instead of as "no rain".
+- The center observation timestamp must be within 15 minutes of the fetch time and no more than 5 minutes in the future.
+- `Raining` freshness is anchored to the Yahoo center **observation timestamp**, not to the later HTTP fetch completion time, and is limited to 15 minutes.
+- Forecast alerts use the absolute Yahoo forecast timestamp. They are hidden once they become too old for their effective urgency level, and never remain visible more than 5 minutes beyond the predicted rain time without a newer successful forecast.
+- A failed refresh does not overwrite a still-fresh previous alert, but the local expiry worker still removes that alert when its freshness window ends.
 
 ## Client ID configuration
 
