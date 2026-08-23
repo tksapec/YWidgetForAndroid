@@ -1,5 +1,6 @@
 package com.tksapec.ywidget.network
 
+import com.tksapec.ywidget.data.RAIN_CENTER_PROBE_ID
 import com.tksapec.ywidget.data.RainObservation
 import com.tksapec.ywidget.data.RainObservationType
 import com.tksapec.ywidget.data.RainProbePoint
@@ -34,7 +35,7 @@ internal class YahooRainClient(private val clientId: String) {
         connection.connectTimeout = 10_000
         connection.readTimeout = 10_000
         connection.requestMethod = "GET"
-        connection.setRequestProperty("User-Agent", "YWidgetForAndroid/1.1")
+        connection.setRequestProperty("User-Agent", "YWidgetForAndroid/1.2")
 
         return try {
             val responseCode = connection.responseCode
@@ -77,6 +78,7 @@ internal class YahooRainClient(private val clientId: String) {
             throw YahooRainParseException("Yahoo rain response has invalid Feature data", error)
         } ?: throw YahooRainParseException("Yahoo rain response has no Feature data")
 
+        val usedProbeIds = mutableSetOf<String>()
         val observations = features.flatMap { featureElement ->
             val feature = try {
                 featureElement.jsonObject
@@ -95,6 +97,9 @@ internal class YahooRainClient(private val clientId: String) {
             val (longitude, latitude) = parseCoordinates(coordinateText)
             val probe = nearestProbe(latitude, longitude, points)
                 ?: throw YahooRainParseException("Yahoo rain response does not match a requested coordinate")
+            if (!usedProbeIds.add(probe.id)) {
+                throw YahooRainParseException("Yahoo rain response contains duplicate coordinates")
+            }
             val weather = try {
                 feature["Property"]
                     ?.jsonObject
@@ -136,6 +141,12 @@ internal class YahooRainClient(private val clientId: String) {
         if (observations.isEmpty()) {
             throw YahooRainParseException("Yahoo rain response contains no rainfall observations")
         }
+        val hasCenterObservation = observations.any {
+            it.probeId == RAIN_CENTER_PROBE_ID && it.type == RainObservationType.Observation
+        }
+        if (!hasCenterObservation) {
+            throw YahooRainParseException("Yahoo rain response has no center observation")
+        }
         return observations
     }
 
@@ -154,11 +165,15 @@ internal class YahooRainClient(private val clientId: String) {
         longitude: Double,
         points: List<RainProbePoint>,
     ): RainProbePoint? {
-        return points.minByOrNull { point ->
+        val nearest = points.minByOrNull { point ->
             val latitudeDelta = point.latitude - latitude
             val longitudeDelta = point.longitude - longitude
             latitudeDelta * latitudeDelta + longitudeDelta * longitudeDelta
-        }
+        } ?: return null
+        val latitudeDelta = nearest.latitude - latitude
+        val longitudeDelta = nearest.longitude - longitude
+        val distanceSquared = latitudeDelta * latitudeDelta + longitudeDelta * longitudeDelta
+        return nearest.takeIf { distanceSquared <= PROBE_MATCH_TOLERANCE_DEGREES * PROBE_MATCH_TOLERANCE_DEGREES }
     }
 
     private fun parseYahooDate(value: String): Long {
@@ -178,5 +193,6 @@ internal class YahooRainClient(private val clientId: String) {
 
     companion object {
         private const val BASE_URL = "https://map.yahooapis.jp/weather/V1/place"
+        private const val PROBE_MATCH_TOLERANCE_DEGREES = 0.002
     }
 }
