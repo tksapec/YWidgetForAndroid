@@ -25,6 +25,16 @@ class WidgetSettingsTest {
     }
 
     @Test
+    fun refreshDueWhenNewsTimestampIsInFutureAfterClockRollback() {
+        val settings = WidgetSettings(
+            updateIntervalMinutes = 60L,
+            newsUpdatedAtMillis = 5_000L,
+        )
+
+        assertTrue(settings.isRefreshDue(now = 4_000L))
+    }
+
+    @Test
     fun refreshDueWhenWeatherHasNeverSucceeded() {
         val settings = WidgetSettings(
             updateIntervalMinutes = 60L,
@@ -48,6 +58,19 @@ class WidgetSettingsTest {
         )
 
         assertTrue(settings.isRefreshDue(now = 3_601_001L))
+    }
+
+    @Test
+    fun refreshDueWhenWeatherTimestampIsInFutureAfterClockRollback() {
+        val settings = WidgetSettings(
+            updateIntervalMinutes = 60L,
+            newsUpdatedAtMillis = 4_000L,
+            weatherEnabled = true,
+            weatherLocationMode = WeatherLocationMode.Fixed,
+            weatherUpdatedAtMillis = 5_000L,
+        )
+
+        assertTrue(settings.isRefreshDue(now = 4_000L))
     }
 
     @Test

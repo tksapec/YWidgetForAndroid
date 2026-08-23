@@ -42,6 +42,7 @@ import com.tksapec.ywidget.data.isRefreshDue
 import com.tksapec.ywidget.data.isRetryableHttpStatus
 import com.tksapec.ywidget.data.needsRefreshStateCleanupAfterFinish
 import com.tksapec.ywidget.data.refreshDiagnosticSummary
+import com.tksapec.ywidget.data.resolveWorkerRefreshGeneration
 import com.tksapec.ywidget.data.shouldRetryTransientFailure
 import com.tksapec.ywidget.data.summarizeNewsFetchResults
 import com.tksapec.ywidget.data.userFacingWeatherErrorMessage
@@ -74,12 +75,12 @@ class RefreshWorker(
 ) : CoroutineWorker(appContext, params) {
     override suspend fun doWork(): Result {
         val preferences = WidgetPreferences(applicationContext)
-        val inputGeneration = inputData.getLong(REFRESH_GENERATION_INPUT_KEY, INVALID_GENERATION)
-        val expectedGeneration = if (inputGeneration == INVALID_GENERATION) {
-            preferences.currentSettings().refreshGeneration
-        } else {
-            inputGeneration
-        }
+        val currentGeneration = preferences.currentSettings().refreshGeneration
+        val rawInputGeneration = inputData.getLong(REFRESH_GENERATION_INPUT_KEY, INVALID_GENERATION)
+        val expectedGeneration = resolveWorkerRefreshGeneration(
+            inputGeneration = rawInputGeneration.takeUnless { it == INVALID_GENERATION },
+            currentGeneration = currentGeneration,
+        ) ?: return Result.success()
         var ownsRefreshState = false
         var retryNeeded = false
         var result = Result.success()

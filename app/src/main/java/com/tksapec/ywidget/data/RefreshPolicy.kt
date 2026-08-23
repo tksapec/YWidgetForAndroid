@@ -10,6 +10,14 @@ internal fun refreshGenerationMatches(currentGeneration: Long, expectedGeneratio
     return currentGeneration == expectedGeneration
 }
 
+internal fun resolveWorkerRefreshGeneration(
+    inputGeneration: Long?,
+    currentGeneration: Long,
+): Long? {
+    if (inputGeneration != null) return inputGeneration
+    return 0L.takeIf { currentGeneration == 0L }
+}
+
 internal fun isTimestampFresh(timestampMillis: Long, nowMillis: Long, maxAgeMillis: Long): Boolean {
     if (timestampMillis <= 0L || maxAgeMillis < 0L) return false
     if (timestampMillis > nowMillis) return false
