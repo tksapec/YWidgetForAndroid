@@ -7,11 +7,12 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
-import com.tksapec.ywidget.data.RAIN_ALERT_MAX_AGE_MILLIS
 import com.tksapec.ywidget.data.RainAlertLevel
+import com.tksapec.ywidget.data.RainAlertState
 import com.tksapec.ywidget.data.WidgetPreferences
 import com.tksapec.ywidget.data.WidgetSettings
 import com.tksapec.ywidget.data.isRainAlertFresh
+import com.tksapec.ywidget.data.rainAlertMaxAgeMillis
 import com.tksapec.ywidget.widget.safeUpdateAll
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.sync.withLock
@@ -43,10 +44,15 @@ class RainAlertExpiryWorker(
         private const val UNIQUE_EXPIRY_WORK = "yahoo_rain_alert_expiry"
         private const val UPDATED_AT_INPUT_KEY = "rain_alert_updated_at_millis"
 
-        fun schedule(context: Context, updatedAtMillis: Long) {
+        fun schedule(context: Context, alert: RainAlertState) {
+            val maxAgeMillis = rainAlertMaxAgeMillis(alert.level)
+            if (maxAgeMillis <= 0L) {
+                cancel(context)
+                return
+            }
             val request = OneTimeWorkRequestBuilder<RainAlertExpiryWorker>()
-                .setInputData(workDataOf(UPDATED_AT_INPUT_KEY to updatedAtMillis))
-                .setInitialDelay(RAIN_ALERT_MAX_AGE_MILLIS + 1_000L, TimeUnit.MILLISECONDS)
+                .setInputData(workDataOf(UPDATED_AT_INPUT_KEY to alert.updatedAtMillis))
+                .setInitialDelay(maxAgeMillis + 1_000L, TimeUnit.MILLISECONDS)
                 .build()
             WorkManager.getInstance(context).enqueueUniqueWork(
                 UNIQUE_EXPIRY_WORK,
@@ -68,5 +74,9 @@ internal fun shouldExpireRainAlert(
 ): Boolean {
     return settings.rainAlertLevel != RainAlertLevel.None &&
         settings.rainAlertUpdatedAtMillis == expectedUpdatedAtMillis &&
-        !isRainAlertFresh(settings.rainAlertUpdatedAtMillis, nowMillis)
+        !isRainAlertFresh(
+            level = settings.rainAlertLevel,
+            updatedAtMillis = settings.rainAlertUpdatedAtMillis,
+            nowMillis = nowMillis,
+        )
 }
