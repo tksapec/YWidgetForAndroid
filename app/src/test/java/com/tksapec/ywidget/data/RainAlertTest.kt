@@ -159,13 +159,56 @@ class RainAlertTest {
     }
 
     @Test
-    fun watchAlertCanRemainFreshForFortyFiveMinutes() {
+    fun watchAlertCanRemainFreshForFortyFiveMinutesWhileItIsStillWatch() {
         assertTrue(
             isRainAlertFresh(
                 RainAlertLevel.Watch,
                 updatedAtMillis = 1_000L,
                 nowMillis = 1_000L + RAIN_ALERT_MAX_AGE_MILLIS,
             ),
+        )
+    }
+
+    @Test
+    fun watchForecastUsesImminentFreshnessAfterCountdownEscalates() {
+        val updatedAt = 1_000L
+        val rainAt = updatedAt + 50 * 60_000L
+        val now = updatedAt + 40 * 60_000L
+
+        assertEquals(
+            RainAlertLevel.Imminent,
+            effectiveRainAlertLevel(
+                storedLevel = RainAlertLevel.Watch,
+                rainAtMillis = rainAt,
+                fallbackMinutesUntilRain = 50,
+                nowMillis = now,
+            ),
+        )
+        assertFalse(
+            isEffectiveRainAlertFresh(
+                storedLevel = RainAlertLevel.Watch,
+                updatedAtMillis = updatedAt,
+                rainAtMillis = rainAt,
+                fallbackMinutesUntilRain = 50,
+                nowMillis = now,
+            ),
+        )
+    }
+
+    @Test
+    fun fiftyMinuteWatchExpiresWhenSoonFreshnessBecomesTooOld() {
+        val updatedAt = 1_000L
+        val state = RainAlertState(
+            level = RainAlertLevel.Watch,
+            minutesUntilRain = 50,
+            rainAtMillis = updatedAt + 50 * 60_000L,
+            rainfallMmPerHour = 1.0,
+            updatedAtMillis = updatedAt,
+        )
+
+        assertEquals(
+            updatedAt + SOON_ALERT_MAX_AGE_MILLIS + 1_000L,
+            rainAlertExpiryAtMillis(state),
         )
     }
 
