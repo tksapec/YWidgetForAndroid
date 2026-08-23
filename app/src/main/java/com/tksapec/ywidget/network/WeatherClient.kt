@@ -33,7 +33,7 @@ class WeatherClient {
         connection.connectTimeout = 10_000
         connection.readTimeout = 10_000
         connection.requestMethod = "GET"
-        connection.setRequestProperty("User-Agent", "YWidget/1.0")
+        connection.setRequestProperty("User-Agent", "YWidgetForAndroid/1.1")
 
         return try {
             if (connection.responseCode !in 200..299) {
@@ -47,16 +47,37 @@ class WeatherClient {
     }
 
     internal fun parseCurrentWeather(body: String): CurrentWeather {
-        val root = runCatching { json.parseToJsonElement(body).jsonObject }
-            .getOrElse { error(WEATHER_DATA_FORMAT_ERROR_MESSAGE) }
+        val root = try {
+            json.parseToJsonElement(body).jsonObject
+        } catch (_: Exception) {
+            error(WEATHER_DATA_FORMAT_ERROR_MESSAGE)
+        }
         val current = root["current"]
-            ?.let { element -> runCatching { element.jsonObject }.getOrNull() }
+            ?.let { element ->
+                try {
+                    element.jsonObject
+                } catch (_: Exception) {
+                    null
+                }
+            }
             ?: error(WEATHER_DATA_FORMAT_ERROR_MESSAGE)
         val code = current["weather_code"]
-            ?.let { element -> runCatching { element.jsonPrimitive.intOrNull }.getOrNull() }
+            ?.let { element ->
+                try {
+                    element.jsonPrimitive.intOrNull
+                } catch (_: Exception) {
+                    null
+                }
+            }
             ?: error(WEATHER_CODE_ERROR_MESSAGE)
         val temperature = current["temperature_2m"]
-            ?.let { element -> runCatching { element.jsonPrimitive.doubleOrNull }.getOrNull() }
+            ?.let { element ->
+                try {
+                    element.jsonPrimitive.doubleOrNull
+                } catch (_: Exception) {
+                    null
+                }
+            }
             ?: error(WEATHER_TEMPERATURE_ERROR_MESSAGE)
         return CurrentWeather(
             code = code,
