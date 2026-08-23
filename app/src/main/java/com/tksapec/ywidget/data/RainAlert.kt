@@ -63,7 +63,7 @@ data class RainAlertState(
         get() = level != RainAlertLevel.None
 }
 
-internal data class RainAlertWriteGuard(
+data class RainAlertWriteGuard(
     val expectedRainGeneration: Long,
     val expectedCurrentLatitude: Double? = null,
     val expectedCurrentLongitude: Double? = null,
