@@ -416,7 +416,7 @@ internal data class GuardedRainTarget(
 )
 
 internal fun isRainAlertConfigured(settings: WidgetSettings): Boolean {
-    return settings.weatherEnabled && settings.weatherLocationMode != WeatherLocationMode.Disabled
+    return settings.rainAlertEnabled && settings.weatherLocationMode != WeatherLocationMode.Disabled
 }
 
 internal fun rainSourceKey(settings: WidgetSettings): String? {
