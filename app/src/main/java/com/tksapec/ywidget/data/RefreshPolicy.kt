@@ -40,6 +40,10 @@ internal fun shouldRetryTransientFailure(
 }
 
 internal fun isAllowedExternalUrl(url: String): Boolean {
-    val uri = runCatching { URI(url) }.getOrNull() ?: return false
+    val uri = try {
+        URI(url)
+    } catch (_: Exception) {
+        return false
+    }
     return uri.scheme.equals("https", ignoreCase = true) && !uri.host.isNullOrBlank()
 }
