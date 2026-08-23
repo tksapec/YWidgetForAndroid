@@ -60,6 +60,7 @@ import com.tksapec.ywidget.data.isNewsRefreshingActive
 import com.tksapec.ywidget.data.isRainAlertFresh
 import com.tksapec.ywidget.data.isRefreshQueuedActive
 import com.tksapec.ywidget.data.isWeatherRefreshingActive
+import com.tksapec.ywidget.data.levelForMinutes
 import com.tksapec.ywidget.data.rainIntensityLabel
 import com.tksapec.ywidget.data.refreshDiagnosticSummary
 import com.tksapec.ywidget.data.remainingRainMinutes
@@ -273,9 +274,9 @@ internal data class RainAlertDisplay(
 
 internal fun rainAlertDisplay(settings: WidgetSettings, now: Long): RainAlertDisplay? {
     if (!settings.rainAlertEnabled) return null
-    val level = settings.rainAlertLevel
-    if (level == RainAlertLevel.None) return null
-    if (!isRainAlertFresh(level, settings.rainAlertUpdatedAtMillis, now)) return null
+    val storedLevel = settings.rainAlertLevel
+    if (storedLevel == RainAlertLevel.None) return null
+    if (!isRainAlertFresh(storedLevel, settings.rainAlertUpdatedAtMillis, now)) return null
 
     val rainfallValue = settings.rainAlertRainfallMmPerHour
     val rainfall = rainfallValue
@@ -285,8 +286,13 @@ internal fun rainAlertDisplay(settings: WidgetSettings, now: Long): RainAlertDis
     val intensity = rainIntensityLabel(rainfallValue)
     val minutes = remainingRainMinutes(settings.rainAlertRainAtMillis, now)
         ?: settings.rainAlertMinutesUntilRain
+    val effectiveLevel = if (storedLevel == RainAlertLevel.Raining) {
+        RainAlertLevel.Raining
+    } else {
+        minutes?.let(::levelForMinutes) ?: storedLevel
+    }
     val rainWording = intensity ?: "雨"
-    val text = when (level) {
+    val text = when (effectiveLevel) {
         RainAlertLevel.Raining -> "☔ 現在${rainWording}が降っています$suffix"
         RainAlertLevel.Imminent,
         RainAlertLevel.Soon,
@@ -318,7 +324,7 @@ internal fun rainAlertDisplay(settings: WidgetSettings, now: Long): RainAlertDis
     }
     return RainAlertDisplay(
         text = text,
-        level = level,
+        level = effectiveLevel,
         isHeavy = rainfallValue != null && rainfallValue >= HEAVY_RAIN_THRESHOLD_MM_PER_HOUR,
     )
 }
@@ -524,7 +530,7 @@ internal fun emptyNewsText(settings: WidgetSettings, now: Long): String {
     if (settings.isRefreshQueuedActive(now)) return "\u66F4\u65B0\u4E88\u7D04\u4E2D..."
     if (settings.hasStaleRefreshState(now)) return "\u524D\u56DE\u66F4\u65B0\u304C\u4E2D\u65AD\u3055\u308C\u307E\u3057\u305F"
     if (settings.lastRefreshResult == RefreshResult.Stale) return "\u524D\u56DE\u66F4\u65B0\u304C\u4E2D\u65AD\u3055\u308C\u307E\u3057\u305F"
-    if (settings.lastNewsError != null) return "\u30CB\u30E5\u30FC\u30B9\u53D6\u5F97\u5931\u6557"
+    if (settings.lastNewsError != null) return "\u30CB\u30E5\u30E5\u30FC\u30B9\u53D6\u5F97\u5931\u6557"
     return "\u672A\u53D6\u5F97 / \u21BB\u3067\u66F4\u65B0"
 }
 
