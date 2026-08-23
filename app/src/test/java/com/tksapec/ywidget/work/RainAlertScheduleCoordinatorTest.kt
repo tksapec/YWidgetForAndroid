@@ -30,4 +30,24 @@ class RainAlertScheduleCoordinatorTest {
 
         assertTrue(completed.isCompleted)
     }
+
+    @Test
+    fun temporaryInvalidationRestoresEnablementWhenCancellationOperationFails() = runBlocking {
+        var enabled = true
+        var failureObserved = false
+
+        try {
+            withRainAlertGenerationInvalidated(
+                wasEnabled = true,
+                setEnabled = { enabled = it },
+            ) {
+                throw IllegalStateException("cancel failed")
+            }
+        } catch (_: IllegalStateException) {
+            failureObserved = true
+        }
+
+        assertTrue(failureObserved)
+        assertTrue(enabled)
+    }
 }
