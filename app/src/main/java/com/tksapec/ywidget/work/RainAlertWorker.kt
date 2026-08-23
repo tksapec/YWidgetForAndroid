@@ -359,9 +359,12 @@ class RainAlertWorker(
             rainAlertScheduleCoordinator.runSerialized {
                 val preferences = WidgetPreferences(context)
                 val wasEnabled = preferences.currentSettings().rainAlertEnabled
-                if (wasEnabled) preferences.updateRainAlertEnabled(false)
-                cancelInternal(context)
-                if (wasEnabled) preferences.updateRainAlertEnabled(true)
+                withRainAlertGenerationInvalidated(
+                    wasEnabled = wasEnabled,
+                    setEnabled = { enabled -> preferences.updateRainAlertEnabled(enabled) },
+                ) {
+                    cancelInternal(context)
+                }
             }
         }
 
