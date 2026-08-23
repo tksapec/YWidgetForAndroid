@@ -75,18 +75,18 @@ class RainAlertWorker(
             return Result.success()
         }
 
-        val clientId = BuildConfig.YAHOO_CLIENT_ID.trim()
-        if (clientId.isBlank()) {
-            RainAlertExpiryWorker.cancel(applicationContext)
-            preferences.clearRainAlert(CLIENT_ID_MISSING_MESSAGE)
-            safeUpdateAll(applicationContext)
-            return Result.success()
-        }
-
         val settings = preferences.currentSettings()
         if (!isRainAlertConfigured(settings)) {
             RainAlertExpiryWorker.cancel(applicationContext)
             preferences.clearRainAlert()
+            safeUpdateAll(applicationContext)
+            return Result.success()
+        }
+
+        val clientId = BuildConfig.YAHOO_CLIENT_ID.trim()
+        if (clientId.isBlank()) {
+            RainAlertExpiryWorker.cancel(applicationContext)
+            preferences.clearRainAlert(CLIENT_ID_MISSING_MESSAGE)
             safeUpdateAll(applicationContext)
             return Result.success()
         }
@@ -314,15 +314,14 @@ class RainAlertWorker(
             rainAlertScheduleMutex.withLock {
                 val preferences = WidgetPreferences(context)
                 val settings = preferences.currentSettings()
-                if (
-                    !hasPlacedWidgets(context) ||
-                    BuildConfig.YAHOO_CLIENT_ID.isBlank() ||
-                    !isRainAlertConfigured(settings)
-                ) {
+                if (!hasPlacedWidgets(context) || !isRainAlertConfigured(settings)) {
                     cancelInternal(context)
-                    preferences.clearRainAlert(
-                        CLIENT_ID_MISSING_MESSAGE.takeIf { BuildConfig.YAHOO_CLIENT_ID.isBlank() },
-                    )
+                    preferences.clearRainAlert()
+                    return@withLock
+                }
+                if (BuildConfig.YAHOO_CLIENT_ID.isBlank()) {
+                    cancelInternal(context)
+                    preferences.clearRainAlert(CLIENT_ID_MISSING_MESSAGE)
                     return@withLock
                 }
                 scheduleInternal(context)
@@ -333,15 +332,14 @@ class RainAlertWorker(
             return rainAlertScheduleMutex.withLock {
                 val preferences = WidgetPreferences(context)
                 val settings = preferences.currentSettings()
-                if (
-                    !hasPlacedWidgets(context) ||
-                    BuildConfig.YAHOO_CLIENT_ID.isBlank() ||
-                    !isRainAlertConfigured(settings)
-                ) {
+                if (!hasPlacedWidgets(context) || !isRainAlertConfigured(settings)) {
                     cancelInternal(context)
-                    preferences.clearRainAlert(
-                        CLIENT_ID_MISSING_MESSAGE.takeIf { BuildConfig.YAHOO_CLIENT_ID.isBlank() },
-                    )
+                    preferences.clearRainAlert()
+                    return@withLock false
+                }
+                if (BuildConfig.YAHOO_CLIENT_ID.isBlank()) {
+                    cancelInternal(context)
+                    preferences.clearRainAlert(CLIENT_ID_MISSING_MESSAGE)
                     return@withLock false
                 }
                 scheduleInternal(context)
