@@ -177,30 +177,21 @@ class RainAlertWorker(
         preferences: WidgetPreferences,
     ): GuardedRainTarget? {
         val live = resolveLiveCurrentTarget()
-        if (live != null) {
-            val guard = preferences.saveRainCurrentLocationIfGeneration(
-                latitude = live.latitude,
-                longitude = live.longitude,
-                locationAtMillis = live.locationAtMillis ?: 0L,
-                expectedGeneration = settings.rainAlertGeneration,
-            )
-            if (guard != null) return GuardedRainTarget(live, guard)
-        }
-
         val latest = preferences.currentSettings()
         if (latest.rainAlertGeneration != settings.rainAlertGeneration) return null
-        val cached = selectRainTarget(
+        val target = selectRainTarget(
             settings = latest,
-            currentTarget = null,
+            currentTarget = live,
             now = System.currentTimeMillis(),
         ) ?: return null
+        val capturedAt = target.locationAtMillis ?: return null
         return GuardedRainTarget(
-            target = cached,
+            target = target,
             guard = RainAlertWriteGuard(
                 expectedRainGeneration = latest.rainAlertGeneration,
-                expectedCurrentLatitude = cached.latitude,
-                expectedCurrentLongitude = cached.longitude,
-                expectedCurrentLocationAtMillis = cached.locationAtMillis,
+                expectedCurrentLatitude = target.latitude,
+                expectedCurrentLongitude = target.longitude,
+                expectedCurrentLocationAtMillis = capturedAt,
             ),
         )
     }
@@ -461,7 +452,7 @@ internal fun selectRainTarget(
             RainTarget(latitude, longitude)
         }
         WeatherLocationMode.Current -> {
-            currentTarget ?: if (settings.hasFreshCachedCurrentLocation(now)) {
+            val cachedTarget = if (settings.hasFreshCachedCurrentLocation(now)) {
                 RainTarget(
                     latitude = settings.lastCurrentLatitude!!,
                     longitude = settings.lastCurrentLongitude!!,
@@ -469,6 +460,13 @@ internal fun selectRainTarget(
                 )
             } else {
                 null
+            }
+            when {
+                currentTarget == null -> cachedTarget
+                cachedTarget == null -> currentTarget
+                (currentTarget.locationAtMillis ?: Long.MIN_VALUE) >=
+                    (cachedTarget.locationAtMillis ?: Long.MIN_VALUE) -> currentTarget
+                else -> cachedTarget
             }
         }
         WeatherLocationMode.Disabled -> null
