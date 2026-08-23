@@ -74,6 +74,25 @@ class RainAlertWorkerTest {
     }
 
     @Test
+    fun currentTargetDoesNotUseCachedCoordinatesWithoutLocationPermission() {
+        val settings = rainSettings(
+            weatherLocationMode = WeatherLocationMode.Current,
+            lastCurrentLatitude = 34.0,
+            lastCurrentLongitude = 134.0,
+            lastCurrentLocationAtMillis = 10_000L,
+        )
+
+        assertNull(
+            selectRainTarget(
+                settings = settings,
+                currentTarget = null,
+                now = 20_000L,
+                currentLocationPermissionGranted = false,
+            ),
+        )
+    }
+
+    @Test
     fun disabledWeatherLocationHasNoRainTarget() {
         val settings = rainSettings(weatherLocationMode = WeatherLocationMode.Disabled)
 
