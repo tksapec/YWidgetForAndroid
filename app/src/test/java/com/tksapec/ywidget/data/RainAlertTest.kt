@@ -196,6 +196,49 @@ class RainAlertTest {
     }
 
     @Test
+    fun forecastIsHiddenMoreThanFiveMinutesAfterPredictedTime() {
+        val updatedAt = 1_000L
+        val rainAt = updatedAt + 10 * 60_000L
+
+        assertTrue(
+            isEffectiveRainAlertFresh(
+                storedLevel = RainAlertLevel.Imminent,
+                updatedAtMillis = updatedAt,
+                rainAtMillis = rainAt,
+                fallbackMinutesUntilRain = 10,
+                nowMillis = rainAt + 5 * 60_000L,
+            ),
+        )
+        assertFalse(
+            isEffectiveRainAlertFresh(
+                storedLevel = RainAlertLevel.Imminent,
+                updatedAtMillis = updatedAt,
+                rainAtMillis = rainAt,
+                fallbackMinutesUntilRain = 10,
+                nowMillis = rainAt + 5 * 60_000L + 1L,
+            ),
+        )
+    }
+
+    @Test
+    fun shortForecastExpiryIsCappedAtFiveMinutesAfterPredictedTime() {
+        val updatedAt = 1_000L
+        val rainAt = updatedAt + 10 * 60_000L
+        val state = RainAlertState(
+            level = RainAlertLevel.Imminent,
+            minutesUntilRain = 10,
+            rainAtMillis = rainAt,
+            rainfallMmPerHour = 1.0,
+            updatedAtMillis = updatedAt,
+        )
+
+        assertEquals(
+            rainAt + 5 * 60_000L + 1_000L,
+            rainAlertExpiryAtMillis(state),
+        )
+    }
+
+    @Test
     fun fiftyMinuteWatchExpiresWhenSoonFreshnessBecomesTooOld() {
         val updatedAt = 1_000L
         val state = RainAlertState(
