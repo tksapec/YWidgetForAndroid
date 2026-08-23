@@ -272,6 +272,7 @@ internal data class RainAlertDisplay(
 )
 
 internal fun rainAlertDisplay(settings: WidgetSettings, now: Long): RainAlertDisplay? {
+    if (!settings.rainAlertEnabled) return null
     val level = settings.rainAlertLevel
     if (level == RainAlertLevel.None) return null
     if (!isRainAlertFresh(level, settings.rainAlertUpdatedAtMillis, now)) return null
@@ -524,7 +525,7 @@ internal fun emptyNewsText(settings: WidgetSettings, now: Long): String {
     if (settings.hasStaleRefreshState(now)) return "\u524D\u56DE\u66F4\u65B0\u304C\u4E2D\u65AD\u3055\u308C\u307E\u3057\u305F"
     if (settings.lastRefreshResult == RefreshResult.Stale) return "\u524D\u56DE\u66F4\u65B0\u304C\u4E2D\u65AD\u3055\u308C\u307E\u3057\u305F"
     if (settings.lastNewsError != null) return "\u30CB\u30E5\u30FC\u30B9\u53D6\u5F97\u5931\u6557"
-    return "\u672A\u53D6 / \u21BB\u3067\u66F4\u65B0"
+    return "\u672A\u53D6\u5F97 / \u21BB\u3067\u66F4\u65B0"
 }
 
 private fun formatUpdatedAt(updatedAtMillis: Long): String {
