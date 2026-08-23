@@ -16,3 +16,17 @@ internal class RainAlertScheduleCoordinator {
         }
     }
 }
+
+internal suspend fun <T> withRainAlertGenerationInvalidated(
+    wasEnabled: Boolean,
+    setEnabled: suspend (Boolean) -> Unit,
+    block: suspend () -> T,
+): T {
+    if (!wasEnabled) return block()
+    setEnabled(false)
+    return try {
+        block()
+    } finally {
+        setEnabled(true)
+    }
+}
