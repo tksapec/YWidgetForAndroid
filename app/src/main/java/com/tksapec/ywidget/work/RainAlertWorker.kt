@@ -26,7 +26,10 @@ import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
 import com.google.android.gms.tasks.CancellationTokenSource
 import com.tksapec.ywidget.BuildConfig
+import com.tksapec.ywidget.data.RAIN_CENTER_PROBE_ID
 import com.tksapec.ywidget.data.RainAlertWriteGuard
+import com.tksapec.ywidget.data.RainObservation
+import com.tksapec.ywidget.data.RainObservationType
 import com.tksapec.ywidget.data.WeatherLocationMode
 import com.tksapec.ywidget.data.WidgetPreferences
 import com.tksapec.ywidget.data.WidgetSettings
@@ -103,10 +106,13 @@ class RainAlertWorker(
             }
             writeGuard = guardedTarget.guard
 
-            val evaluatedAt = System.currentTimeMillis()
             val points = buildRainProbePoints(guardedTarget.target.latitude, guardedTarget.target.longitude)
             val observations = withContext(Dispatchers.IO) {
                 YahooRainClient(clientId).fetch(points)
+            }
+            val evaluatedAt = System.currentTimeMillis()
+            if (!isRainObservationTimelineUsable(observations, evaluatedAt)) {
+                throw YahooRainParseException("Yahoo rain observation timestamp is stale or invalid")
             }
             val alert = evaluateRainAlert(
                 observations = observations,
@@ -469,6 +475,23 @@ internal fun selectRainTarget(
     }
 }
 
+internal fun isRainObservationTimelineUsable(
+    observations: List<RainObservation>,
+    evaluatedAtMillis: Long,
+): Boolean {
+    val centerObservationAt = observations
+        .asSequence()
+        .filter {
+            it.probeId == RAIN_CENTER_PROBE_ID &&
+                it.type == RainObservationType.Observation
+        }
+        .maxOfOrNull { it.timestampMillis }
+        ?: return false
+    val oldestAllowed = evaluatedAtMillis - RAIN_OBSERVATION_MAX_AGE_MILLIS
+    val newestAllowed = evaluatedAtMillis + RAIN_OBSERVATION_MAX_FUTURE_SKEW_MILLIS
+    return centerObservationAt in oldestAllowed..newestAllowed
+}
+
 internal fun hasPlacedWidgets(context: Context): Boolean {
     val appWidgetManager = AppWidgetManager.getInstance(context)
     val componentName = ComponentName(context, YWidgetReceiver::class.java)
@@ -488,3 +511,6 @@ internal fun isTransientRainFailure(error: Throwable): Boolean {
         else -> false
     }
 }
+
+private const val RAIN_OBSERVATION_MAX_AGE_MILLIS = 15 * 60 * 1_000L
+private const val RAIN_OBSERVATION_MAX_FUTURE_SKEW_MILLIS = 5 * 60 * 1_000L
