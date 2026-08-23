@@ -14,6 +14,19 @@ class RefreshPolicyTest {
     }
 
     @Test
+    fun legacyWorkerCanRunOnlyBeforeGenerationTrackingHasStarted() {
+        assertEquals(0L, resolveWorkerRefreshGeneration(null, currentGeneration = 0L))
+        assertNull(resolveWorkerRefreshGeneration(null, currentGeneration = 1L))
+        assertNull(resolveWorkerRefreshGeneration(null, currentGeneration = 20L))
+    }
+
+    @Test
+    fun workerWithExplicitGenerationKeepsItsGenerationForOwnershipCheck() {
+        assertEquals(4L, resolveWorkerRefreshGeneration(4L, currentGeneration = 4L))
+        assertEquals(3L, resolveWorkerRefreshGeneration(3L, currentGeneration = 4L))
+    }
+
+    @Test
     fun timestampFreshnessRejectsOldFutureAndMissingValues() {
         val now = 2_000_000L
 
