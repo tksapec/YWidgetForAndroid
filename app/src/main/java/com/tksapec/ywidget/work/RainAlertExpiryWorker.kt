@@ -34,7 +34,7 @@ class RainAlertExpiryWorker(
                 nowMillis = System.currentTimeMillis(),
             )
         ) {
-            preferences.clearRainAlert()
+            preferences.clearRainAlert(settings.lastRainAlertError)
             safeUpdateAll(applicationContext)
         }
         Result.success()
