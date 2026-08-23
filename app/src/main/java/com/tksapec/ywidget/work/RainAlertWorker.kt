@@ -102,6 +102,14 @@ class RainAlertWorker(
             }
             writeGuard = guardedTarget.guard
 
+            if (settings.weatherLocationMode == WeatherLocationMode.Current && !hasLocationPermission()) {
+                if (preferences.clearRainAlertIfGuard(writeGuard, LOCATION_UNAVAILABLE_MESSAGE)) {
+                    RainAlertExpiryWorker.cancel(applicationContext)
+                    safeUpdateAll(applicationContext)
+                }
+                return Result.success()
+            }
+
             val points = buildRainProbePoints(guardedTarget.target.latitude, guardedTarget.target.longitude)
             val observations = withContext(Dispatchers.IO) {
                 YahooRainClient(clientId).fetch(points)
@@ -172,16 +180,16 @@ class RainAlertWorker(
         settings: WidgetSettings,
         preferences: WidgetPreferences,
     ): GuardedRainTarget? {
-        val locationPermissionGranted = hasLocationPermission()
-        if (!locationPermissionGranted) return null
+        if (!hasLocationPermission()) return null
         val live = resolveLiveCurrentTarget()
+        if (!hasLocationPermission()) return null
         val latest = preferences.currentSettings()
         if (latest.rainAlertGeneration != settings.rainAlertGeneration) return null
         val target = selectRainTarget(
             settings = latest,
             currentTarget = live,
             now = System.currentTimeMillis(),
-            currentLocationPermissionGranted = locationPermissionGranted,
+            currentLocationPermissionGranted = true,
         ) ?: return null
         val capturedAt = target.locationAtMillis ?: return null
         return GuardedRainTarget(
