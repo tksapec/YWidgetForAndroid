@@ -534,6 +534,10 @@ class YWidgetReceiver : GlanceAppWidgetReceiver() {
             try {
                 WidgetPreferences(context.applicationContext).clearRefreshState()
                 safeUpdateAll(context.applicationContext)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                Log.w("YWidgetReceiver", "Failed to clear disabled widget state", error)
             } finally {
                 pendingResult.finish()
             }
@@ -557,13 +561,17 @@ class YWidgetReceiver : GlanceAppWidgetReceiver() {
         val pendingResult = goAsync()
         CoroutineScope(Dispatchers.Default).launch {
             try {
-                // Periodic refresh is owned by WorkManager; AppWidgetProvider only registers and kicks due work.
                 RefreshWorker.schedulePeriodicFromSettings(context.applicationContext)
                 if (refreshImmediately) {
                     RefreshWorker.enqueueImmediateByUser(context.applicationContext)
                 } else {
                     RefreshWorker.enqueueImmediateIfDueFromSettings(context.applicationContext)
                 }
+                safeUpdateAll(context.applicationContext)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                Log.w("YWidgetReceiver", "Failed to configure widget refresh", error)
                 safeUpdateAll(context.applicationContext)
             } finally {
                 pendingResult.finish()
