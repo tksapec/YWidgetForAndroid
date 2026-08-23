@@ -65,6 +65,12 @@ class WidgetPreferences internal constructor(private val dataStore: DataStore<Pr
             temperatureCelsius = preferences[Keys.temperatureCelsius],
             weatherUpdatedAtMillis = preferences[Keys.weatherUpdatedAtMillis] ?: 0L,
             weatherRefreshing = preferences[Keys.weatherRefreshing] ?: false,
+            rainAlertLevel = RainAlertLevel.fromName(preferences[Keys.rainAlertLevel]),
+            rainAlertMinutesUntilRain = preferences[Keys.rainAlertMinutesUntilRain],
+            rainAlertRainfallMmPerHour = preferences[Keys.rainAlertRainfallMmPerHour],
+            rainAlertNearbyOnly = preferences[Keys.rainAlertNearbyOnly] ?: false,
+            rainAlertUpdatedAtMillis = preferences[Keys.rainAlertUpdatedAtMillis] ?: 0L,
+            lastRainAlertError = preferences[Keys.lastRainAlertError],
             lastNewsError = preferences[Keys.lastNewsError],
             lastWeatherError = preferences[Keys.lastWeatherError],
             lastRefreshStartedAtMillis = preferences[Keys.lastRefreshStartedAtMillis] ?: 0L,
@@ -114,7 +120,10 @@ class WidgetPreferences internal constructor(private val dataStore: DataStore<Pr
     }
 
     suspend fun updateWeatherEnabled(enabled: Boolean) {
-        dataStore.edit { it[Keys.weatherEnabled] = enabled }
+        dataStore.edit {
+            it[Keys.weatherEnabled] = enabled
+            if (!enabled) clearRainAlertCache(it)
+        }
     }
 
     suspend fun updateWeatherLocationMode(mode: WeatherLocationMode) {
@@ -125,6 +134,7 @@ class WidgetPreferences internal constructor(private val dataStore: DataStore<Pr
             if (changed) {
                 invalidateRefreshGeneration(it)
                 clearWeatherCache(it)
+                clearRainAlertCache(it)
             }
             if (mode == WeatherLocationMode.Disabled) {
                 it.remove(Keys.lastWeatherError)
@@ -142,6 +152,7 @@ class WidgetPreferences internal constructor(private val dataStore: DataStore<Pr
             if (changed) {
                 invalidateRefreshGeneration(it)
                 clearWeatherCache(it)
+                clearRainAlertCache(it)
             }
         }
     }
@@ -342,6 +353,36 @@ class WidgetPreferences internal constructor(private val dataStore: DataStore<Pr
         }
     }
 
+    suspend fun saveRainAlert(state: RainAlertState) {
+        dataStore.edit {
+            it[Keys.rainAlertLevel] = state.level.name
+            state.minutesUntilRain?.let { minutes ->
+                it[Keys.rainAlertMinutesUntilRain] = minutes
+            } ?: it.remove(Keys.rainAlertMinutesUntilRain)
+            state.rainfallMmPerHour?.let { rainfall ->
+                it[Keys.rainAlertRainfallMmPerHour] = rainfall
+            } ?: it.remove(Keys.rainAlertRainfallMmPerHour)
+            it[Keys.rainAlertNearbyOnly] = state.nearbyOnly
+            it[Keys.rainAlertUpdatedAtMillis] = state.updatedAtMillis
+            it.remove(Keys.lastRainAlertError)
+        }
+    }
+
+    suspend fun saveRainAlertError(message: String) {
+        dataStore.edit { it[Keys.lastRainAlertError] = message }
+    }
+
+    suspend fun clearRainAlert(message: String? = null) {
+        dataStore.edit {
+            clearRainAlertCache(it)
+            if (message.isNullOrBlank()) {
+                it.remove(Keys.lastRainAlertError)
+            } else {
+                it[Keys.lastRainAlertError] = message
+            }
+        }
+    }
+
     suspend fun clearRefreshState() {
         dataStore.edit {
             invalidateRefreshGeneration(it)
@@ -432,6 +473,15 @@ class WidgetPreferences internal constructor(private val dataStore: DataStore<Pr
         preferences.remove(Keys.lastWeatherError)
     }
 
+    private fun clearRainAlertCache(preferences: androidx.datastore.preferences.core.MutablePreferences) {
+        preferences.remove(Keys.rainAlertLevel)
+        preferences.remove(Keys.rainAlertMinutesUntilRain)
+        preferences.remove(Keys.rainAlertRainfallMmPerHour)
+        preferences.remove(Keys.rainAlertNearbyOnly)
+        preferences.remove(Keys.rainAlertUpdatedAtMillis)
+        preferences.remove(Keys.lastRainAlertError)
+    }
+
     private fun finishRefreshEdit(
         preferences: androidx.datastore.preferences.core.MutablePreferences,
         result: RefreshResult,
@@ -473,6 +523,12 @@ class WidgetPreferences internal constructor(private val dataStore: DataStore<Pr
         val temperatureCelsius = doublePreferencesKey("temperature_celsius")
         val weatherUpdatedAtMillis = longPreferencesKey("weather_updated_at_millis")
         val weatherRefreshing = booleanPreferencesKey("weather_refreshing")
+        val rainAlertLevel = stringPreferencesKey("rain_alert_level")
+        val rainAlertMinutesUntilRain = intPreferencesKey("rain_alert_minutes_until_rain")
+        val rainAlertRainfallMmPerHour = doublePreferencesKey("rain_alert_rainfall_mm_per_hour")
+        val rainAlertNearbyOnly = booleanPreferencesKey("rain_alert_nearby_only")
+        val rainAlertUpdatedAtMillis = longPreferencesKey("rain_alert_updated_at_millis")
+        val lastRainAlertError = stringPreferencesKey("last_rain_alert_error")
         val lastNewsError = stringPreferencesKey("last_news_error")
         val lastWeatherError = stringPreferencesKey("last_weather_error")
         val lastRefreshStartedAtMillis = longPreferencesKey("last_refresh_started_at_millis")

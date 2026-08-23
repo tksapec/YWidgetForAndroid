@@ -53,6 +53,7 @@ import com.tksapec.ywidget.data.WidgetPreferences
 import com.tksapec.ywidget.data.WidgetSettings
 import com.tksapec.ywidget.widget.YWidgetReceiver
 import com.tksapec.ywidget.widget.safeUpdateAll
+import com.tksapec.ywidget.work.RainAlertWorker
 import com.tksapec.ywidget.work.RefreshWorker
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -68,6 +69,7 @@ class MainActivity : ComponentActivity() {
         if (hasPlacedWidgets()) {
             lifecycleScope.launch {
                 RefreshWorker.schedulePeriodicFromSettings(this@MainActivity)
+                RainAlertWorker.scheduleFromSettings(this@MainActivity)
             }
         }
 
@@ -110,6 +112,7 @@ class MainActivity : ComponentActivity() {
                             lifecycleScope.launch {
                                 preferences.updateWeatherLocationMode(mode)
                                 if (mode == WeatherLocationMode.Disabled) {
+                                    RainAlertWorker.scheduleFromSettings(this@MainActivity)
                                     safeUpdateAll(this@MainActivity)
                                 } else {
                                     enqueueImmediateRefresh()
@@ -147,6 +150,7 @@ class MainActivity : ComponentActivity() {
     private suspend fun enqueueImmediateRefresh() {
         try {
             RefreshWorker.enqueueImmediateByUser(this)
+            RainAlertWorker.enqueueImmediateIfConfigured(this)
             safeUpdateAll(this)
         } catch (error: CancellationException) {
             throw error
@@ -249,6 +253,12 @@ private fun SettingsScreen(
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
+            if (settings.weatherLocationMode != WeatherLocationMode.Disabled) {
+                Text(
+                    text = "Yahoo!雨予報は約15分間隔で現在地または固定地域の周辺を確認します。",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
         }
 
         SettingRow(label = "\u4F4D\u7F6E\u60C5\u5831\u6A29\u9650") {
@@ -293,6 +303,13 @@ private fun SettingsScreen(
                     color = MaterialTheme.colorScheme.error,
                 )
             }
+            settings.lastRainAlertError?.takeIf { it.isNotBlank() }?.let { error ->
+                Text(
+                    text = "雨予報エラー: $error",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
         }
 
         Spacer(modifier = Modifier.height(8.dp))
@@ -328,6 +345,9 @@ private fun RefreshDiagnostics(settings: WidgetSettings) {
     val rows = listOf(
         "最終ニュース取得" to formatDiagnosticTime(settings.newsUpdatedAtMillis),
         "最終天気取得" to formatDiagnosticTime(settings.weatherUpdatedAtMillis),
+        "最終雨予報取得" to formatDiagnosticTime(settings.rainAlertUpdatedAtMillis),
+        "雨予報状態" to "${settings.rainAlertLevel.name}, minutes=${settings.rainAlertMinutesUntilRain}, nearby=${settings.rainAlertNearbyOnly}",
+        "雨予報エラー" to settings.lastRainAlertError.orEmpty().ifBlank { "なし" },
         "最終更新開始" to formatDiagnosticTime(settings.lastRefreshStartedAtMillis),
         "最終更新終了" to formatDiagnosticTime(settings.lastRefreshFinishedAtMillis),
         "更新世代" to settings.refreshGeneration.toString(),
