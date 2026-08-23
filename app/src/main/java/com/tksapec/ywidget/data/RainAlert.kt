@@ -244,8 +244,15 @@ internal fun isEffectiveRainAlertFresh(
     fallbackMinutesUntilRain: Int?,
     nowMillis: Long,
 ): Boolean {
+    if (storedLevel == RainAlertLevel.Raining) {
+        val observedAtMillis = rainAtMillis ?: updatedAtMillis
+        return isRainAlertFresh(
+            level = RainAlertLevel.Raining,
+            updatedAtMillis = observedAtMillis,
+            nowMillis = nowMillis,
+        )
+    }
     if (
-        storedLevel != RainAlertLevel.Raining &&
         rainAtMillis != null &&
         nowMillis > rainAtMillis + RAIN_FORECAST_PAST_GRACE_MILLIS
     ) {
@@ -264,7 +271,8 @@ internal fun rainAlertExpiryAtMillis(alert: RainAlertState): Long? {
     if (!alert.isActive || alert.updatedAtMillis <= 0L) return null
     val updatedAt = alert.updatedAtMillis
     if (alert.level == RainAlertLevel.Raining) {
-        return updatedAt + RAINING_ALERT_MAX_AGE_MILLIS + RAIN_ALERT_EXPIRY_GRACE_MILLIS
+        val observedAtMillis = alert.rainAtMillis ?: updatedAt
+        return observedAtMillis + RAINING_ALERT_MAX_AGE_MILLIS + RAIN_ALERT_EXPIRY_GRACE_MILLIS
     }
 
     val rainAt = alert.rainAtMillis ?: run {
