@@ -4,6 +4,9 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.pm.PackageManager
+import android.location.Address
+import android.location.Geocoder
+import android.os.Build
 import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.work.BackoffPolicy
@@ -36,9 +39,12 @@ import com.tksapec.ywidget.widget.safeUpdateAll
 import java.io.IOException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
+import java.util.Locale
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resume
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.tasks.await
@@ -66,7 +72,8 @@ class RainAlertWorker(
         }
 
         val settings = preferences.currentSettings()
-        if (!isRainAlertConfigured(settings)) {
+        val sourceKey = rainSourceKey(settings)
+        if (sourceKey == null) {
             RainAlertExpiryWorker.cancel(applicationContext)
             preferences.clearRainAlert()
             safeUpdateAll(applicationContext)
@@ -74,20 +81,13 @@ class RainAlertWorker(
         }
 
         return try {
-            val liveCurrentTarget = if (settings.weatherLocationMode == WeatherLocationMode.Current) {
-                resolveLiveCurrentTarget(preferences)
-            } else {
-                null
-            }
-            val target = selectRainTarget(
-                settings = settings,
-                currentTarget = liveCurrentTarget,
-                now = System.currentTimeMillis(),
-            )
+            val target = resolveRainTarget(settings, preferences)
             if (target == null) {
-                RainAlertExpiryWorker.cancel(applicationContext)
-                preferences.clearRainAlert(LOCATION_UNAVAILABLE_MESSAGE)
-                safeUpdateAll(applicationContext)
+                if (rainSourceKey(preferences.currentSettings()) == sourceKey) {
+                    RainAlertExpiryWorker.cancel(applicationContext)
+                    preferences.clearRainAlert(LOCATION_UNAVAILABLE_MESSAGE)
+                    safeUpdateAll(applicationContext)
+                }
                 return Result.success()
             }
 
@@ -100,6 +100,10 @@ class RainAlertWorker(
                 observations = observations,
                 evaluatedAtMillis = evaluatedAt,
             )
+            if (rainSourceKey(preferences.currentSettings()) != sourceKey) {
+                return Result.success()
+            }
+
             preferences.saveRainAlert(alert)
             if (alert.isActive) {
                 RainAlertExpiryWorker.schedule(applicationContext, alert.updatedAtMillis)
@@ -112,15 +116,41 @@ class RainAlertWorker(
             throw error
         } catch (error: Exception) {
             Log.w(TAG, "Yahoo rain refresh failed", error)
-            preferences.saveRainAlertError(
-                error.message?.take(160) ?: error.javaClass.simpleName,
-            )
-            safeUpdateAll(applicationContext)
+            if (rainSourceKey(preferences.currentSettings()) == sourceKey) {
+                preferences.saveRainAlertError(
+                    error.message?.take(160) ?: error.javaClass.simpleName,
+                )
+                safeUpdateAll(applicationContext)
+            }
             if (shouldRetryTransientFailure(isTransientRainFailure(error), runAttemptCount)) {
                 Result.retry()
             } else {
                 Result.failure()
             }
+        }
+    }
+
+    private suspend fun resolveRainTarget(
+        settings: WidgetSettings,
+        preferences: WidgetPreferences,
+    ): RainTarget? {
+        return when (settings.weatherLocationMode) {
+            WeatherLocationMode.Current -> {
+                val live = resolveLiveCurrentTarget(preferences)
+                selectRainTarget(
+                    settings = settings,
+                    currentTarget = live,
+                    now = System.currentTimeMillis(),
+                )
+            }
+            WeatherLocationMode.Fixed -> {
+                selectRainTarget(
+                    settings = settings,
+                    currentTarget = null,
+                    now = System.currentTimeMillis(),
+                ) ?: resolveFixedRainTarget(settings, preferences)
+            }
+            WeatherLocationMode.Disabled -> null
         }
     }
 
@@ -184,6 +214,51 @@ class RainAlertWorker(
         return RainTarget(location.latitude, location.longitude)
     }
 
+    private suspend fun resolveFixedRainTarget(
+        settings: WidgetSettings,
+        preferences: WidgetPreferences,
+    ): RainTarget? {
+        val query = settings.fixedLocationQuery.trim()
+        if (query.isBlank() || !Geocoder.isPresent()) return null
+        val address = withTimeoutOrNull(GEOCODE_TIMEOUT_MILLIS) {
+            geocodeLocationName(query)
+        } ?: return null
+        if (rainSourceKey(preferences.currentSettings()) != rainSourceKey(settings)) return null
+        return RainTarget(address.latitude, address.longitude)
+    }
+
+    private suspend fun geocodeLocationName(query: String): Address? {
+        val geocoder = Geocoder(applicationContext, Locale.JAPAN)
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            suspendCancellableCoroutine { continuation ->
+                geocoder.getFromLocationName(
+                    query,
+                    1,
+                    object : Geocoder.GeocodeListener {
+                        override fun onGeocode(addresses: MutableList<Address>) {
+                            if (continuation.isActive) continuation.resume(addresses.firstOrNull())
+                        }
+
+                        override fun onError(errorMessage: String?) {
+                            Log.w(TAG, "Rain geocoder failed: ${errorMessage.orEmpty()}")
+                            if (continuation.isActive) continuation.resume(null)
+                        }
+                    },
+                )
+            }
+        } else {
+            withContext(Dispatchers.IO) {
+                try {
+                    @Suppress("DEPRECATION")
+                    geocoder.getFromLocationName(query, 1)?.firstOrNull()
+                } catch (error: IOException) {
+                    Log.w(TAG, "Rain geocoder I/O failure", error)
+                    null
+                }
+            }
+        }
+    }
+
     companion object {
         private const val TAG = "RainAlertWorker"
         private const val UNIQUE_PERIODIC_WORK = "yahoo_rain_alert_periodic"
@@ -192,6 +267,7 @@ class RainAlertWorker(
         private const val LAST_LOCATION_TIMEOUT_MILLIS = 2_000L
         private const val CURRENT_LOCATION_TIMEOUT_MILLIS = 8_000L
         private const val CURRENT_LOCATION_TOTAL_TIMEOUT_MILLIS = 10_000L
+        private const val GEOCODE_TIMEOUT_MILLIS = 8_000L
         private const val CLIENT_ID_MISSING_MESSAGE = "Yahoo Client ID未設定"
         private const val LOCATION_UNAVAILABLE_MESSAGE = "雨予報用の位置情報を取得できません"
 
@@ -266,6 +342,24 @@ internal data class RainTarget(
 
 internal fun isRainAlertConfigured(settings: WidgetSettings): Boolean {
     return settings.weatherEnabled && settings.weatherLocationMode != WeatherLocationMode.Disabled
+}
+
+internal fun rainSourceKey(settings: WidgetSettings): String? {
+    if (!isRainAlertConfigured(settings)) return null
+    return when (settings.weatherLocationMode) {
+        WeatherLocationMode.Current -> "current"
+        WeatherLocationMode.Fixed -> {
+            val query = settings.fixedLocationQuery.trim()
+            if (query.isNotBlank()) {
+                "fixed:query:$query"
+            } else {
+                val latitude = settings.fixedLatitude ?: return null
+                val longitude = settings.fixedLongitude ?: return null
+                "fixed:coordinates:$latitude,$longitude"
+            }
+        }
+        WeatherLocationMode.Disabled -> null
+    }
 }
 
 internal fun selectRainTarget(
