@@ -36,7 +36,6 @@ import com.tksapec.ywidget.data.WidgetSettings
 import com.tksapec.ywidget.data.buildRainProbePoints
 import com.tksapec.ywidget.data.evaluateRainAlert
 import com.tksapec.ywidget.data.freshLocationTimestampOrNull
-import com.tksapec.ywidget.data.hasFreshCachedCurrentLocation
 import com.tksapec.ywidget.data.isRetryableHttpStatus
 import com.tksapec.ywidget.data.shouldRetryTransientFailure
 import com.tksapec.ywidget.network.YahooRainClient
@@ -222,6 +221,7 @@ class RainAlertWorker(
                     freshLocationTimestampOrNull(
                         locationTimestampMillis = location.time,
                         nowMillis = System.currentTimeMillis(),
+                        maxAgeMillis = RAIN_CURRENT_LOCATION_MAX_AGE_MILLIS,
                     ) != null
                 }
                 lastLocation ?: run {
@@ -236,6 +236,7 @@ class RainAlertWorker(
                             freshLocationTimestampOrNull(
                                 locationTimestampMillis = current.time,
                                 nowMillis = System.currentTimeMillis(),
+                                maxAgeMillis = RAIN_CURRENT_LOCATION_MAX_AGE_MILLIS,
                             ) != null
                         }
                     } finally {
@@ -457,10 +458,18 @@ internal fun selectRainTarget(
         }
         WeatherLocationMode.Current -> {
             if (!currentLocationPermissionGranted) return null
-            val cachedTarget = if (settings.hasFreshCachedCurrentLocation(now)) {
+            val cachedTarget = if (
+                settings.lastCurrentLatitude != null &&
+                settings.lastCurrentLongitude != null &&
+                freshLocationTimestampOrNull(
+                    locationTimestampMillis = settings.lastCurrentLocationAtMillis,
+                    nowMillis = now,
+                    maxAgeMillis = RAIN_CURRENT_LOCATION_MAX_AGE_MILLIS,
+                ) != null
+            ) {
                 RainTarget(
-                    latitude = settings.lastCurrentLatitude!!,
-                    longitude = settings.lastCurrentLongitude!!,
+                    latitude = settings.lastCurrentLatitude,
+                    longitude = settings.lastCurrentLongitude,
                     locationAtMillis = settings.lastCurrentLocationAtMillis,
                 )
             } else {
@@ -515,5 +524,6 @@ internal fun isTransientRainFailure(error: Throwable): Boolean {
     }
 }
 
+private const val RAIN_CURRENT_LOCATION_MAX_AGE_MILLIS = 15 * 60 * 1_000L
 private const val RAIN_OBSERVATION_MAX_AGE_MILLIS = 15 * 60 * 1_000L
 private const val RAIN_OBSERVATION_MAX_FUTURE_SKEW_MILLIS = 5 * 60 * 1_000L
