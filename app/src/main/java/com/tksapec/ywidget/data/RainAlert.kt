@@ -16,6 +16,7 @@ internal const val SOON_ALERT_MAX_AGE_MILLIS: Long = 30 * 60 * 1_000L
 internal const val HEAVY_RAIN_THRESHOLD_MM_PER_HOUR: Double = 10.0
 internal const val MODERATE_RAIN_THRESHOLD_MM_PER_HOUR: Double = 2.0
 private const val MINUTE_MILLIS: Long = 60_000L
+private const val RAIN_FORECAST_PAST_GRACE_MILLIS: Long = 5 * MINUTE_MILLIS
 private const val RAIN_ALERT_EXPIRY_GRACE_MILLIS: Long = 1_000L
 
 enum class RainAlertLevel {
@@ -243,6 +244,13 @@ internal fun isEffectiveRainAlertFresh(
     fallbackMinutesUntilRain: Int?,
     nowMillis: Long,
 ): Boolean {
+    if (
+        storedLevel != RainAlertLevel.Raining &&
+        rainAtMillis != null &&
+        nowMillis > rainAtMillis + RAIN_FORECAST_PAST_GRACE_MILLIS
+    ) {
+        return false
+    }
     val effectiveLevel = effectiveRainAlertLevel(
         storedLevel = storedLevel,
         rainAtMillis = rainAtMillis,
@@ -288,7 +296,10 @@ internal fun rainAlertExpiryAtMillis(alert: RainAlertState): Long? {
         imminentStart,
         updatedAt + IMMINENT_ALERT_MAX_AGE_MILLIS + RAIN_ALERT_EXPIRY_GRACE_MILLIS,
     )
-    return candidates.minOrNull()
+
+    val urgencyExpiry = candidates.minOrNull()
+    val forecastExpiry = rainAt + RAIN_FORECAST_PAST_GRACE_MILLIS + RAIN_ALERT_EXPIRY_GRACE_MILLIS
+    return if (urgencyExpiry == null) forecastExpiry else minOf(urgencyExpiry, forecastExpiry)
 }
 
 internal fun rainIntensityLabel(rainfallMmPerHour: Double?): String? = when {
