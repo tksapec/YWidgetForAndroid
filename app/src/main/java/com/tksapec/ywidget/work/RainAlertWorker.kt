@@ -91,7 +91,7 @@ class RainAlertWorker(
             return Result.success()
         }
 
-        var writeGuard = RainAlertWriteGuard(settings.refreshGeneration)
+        var writeGuard = RainAlertWriteGuard(settings.rainAlertGeneration)
         return try {
             val guardedTarget = resolveGuardedRainTarget(settings, preferences)
             if (guardedTarget == null) {
@@ -158,7 +158,7 @@ class RainAlertWorker(
                 target?.let {
                     GuardedRainTarget(
                         target = it,
-                        guard = RainAlertWriteGuard(settings.refreshGeneration),
+                        guard = RainAlertWriteGuard(settings.rainAlertGeneration),
                     )
                 }
             }
@@ -176,13 +176,13 @@ class RainAlertWorker(
                 latitude = live.latitude,
                 longitude = live.longitude,
                 locationAtMillis = live.locationAtMillis ?: 0L,
-                expectedGeneration = settings.refreshGeneration,
+                expectedGeneration = settings.rainAlertGeneration,
             )
             if (guard != null) return GuardedRainTarget(live, guard)
         }
 
         val latest = preferences.currentSettings()
-        if (latest.refreshGeneration != settings.refreshGeneration) return null
+        if (latest.rainAlertGeneration != settings.rainAlertGeneration) return null
         val cached = selectRainTarget(
             settings = latest,
             currentTarget = null,
@@ -191,7 +191,7 @@ class RainAlertWorker(
         return GuardedRainTarget(
             target = cached,
             guard = RainAlertWriteGuard(
-                expectedRefreshGeneration = latest.refreshGeneration,
+                expectedRainGeneration = latest.rainAlertGeneration,
                 expectedCurrentLatitude = cached.latitude,
                 expectedCurrentLongitude = cached.longitude,
                 expectedCurrentLocationAtMillis = cached.locationAtMillis,
@@ -262,7 +262,7 @@ class RainAlertWorker(
         val address = withTimeoutOrNull(GEOCODE_TIMEOUT_MILLIS) {
             geocodeLocationName(query)
         } ?: return null
-        if (preferences.currentSettings().refreshGeneration != settings.refreshGeneration) return null
+        if (preferences.currentSettings().rainAlertGeneration != settings.rainAlertGeneration) return null
         return RainTarget(address.latitude, address.longitude)
     }
 
