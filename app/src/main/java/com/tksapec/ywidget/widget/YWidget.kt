@@ -46,6 +46,7 @@ import androidx.glance.text.Text
 import androidx.glance.text.TextAlign
 import androidx.glance.text.TextStyle
 import androidx.glance.unit.ColorProvider
+import com.tksapec.ywidget.data.HEAVY_RAIN_THRESHOLD_MM_PER_HOUR
 import com.tksapec.ywidget.data.LauncherAppShortcut
 import com.tksapec.ywidget.data.NewsItem
 import com.tksapec.ywidget.data.RainAlertLevel
@@ -59,7 +60,9 @@ import com.tksapec.ywidget.data.isNewsRefreshingActive
 import com.tksapec.ywidget.data.isRainAlertFresh
 import com.tksapec.ywidget.data.isRefreshQueuedActive
 import com.tksapec.ywidget.data.isWeatherRefreshingActive
+import com.tksapec.ywidget.data.rainIntensityLabel
 import com.tksapec.ywidget.data.refreshDiagnosticSummary
+import com.tksapec.ywidget.data.remainingRainMinutes
 import com.tksapec.ywidget.data.weatherIconForCode
 import com.tksapec.ywidget.work.RainAlertWorker
 import com.tksapec.ywidget.work.RefreshWorker
@@ -265,48 +268,75 @@ internal fun weatherDisplay(settings: WidgetSettings, now: Long): WeatherDisplay
 internal data class RainAlertDisplay(
     val text: String,
     val level: RainAlertLevel,
+    val isHeavy: Boolean,
 )
 
 internal fun rainAlertDisplay(settings: WidgetSettings, now: Long): RainAlertDisplay? {
-    if (settings.rainAlertLevel == RainAlertLevel.None) return null
-    if (!isRainAlertFresh(settings.rainAlertUpdatedAtMillis, now)) return null
+    val level = settings.rainAlertLevel
+    if (level == RainAlertLevel.None) return null
+    if (!isRainAlertFresh(level, settings.rainAlertUpdatedAtMillis, now)) return null
 
-    val rainfall = settings.rainAlertRainfallMmPerHour
+    val rainfallValue = settings.rainAlertRainfallMmPerHour
+    val rainfall = rainfallValue
         ?.let { String.format(Locale.US, "%.1f mm/h", it) }
         .orEmpty()
     val suffix = rainfall.takeIf { it.isNotBlank() }?.let { " $it" }.orEmpty()
-    val minutes = settings.rainAlertMinutesUntilRain
-    val text = when (settings.rainAlertLevel) {
-        RainAlertLevel.Raining -> "☔ 現在雨が降っています$suffix"
+    val intensity = rainIntensityLabel(rainfallValue)
+    val minutes = remainingRainMinutes(settings.rainAlertRainAtMillis, now)
+        ?: settings.rainAlertMinutesUntilRain
+    val rainWording = intensity ?: "雨"
+    val text = when (level) {
+        RainAlertLevel.Raining -> "☔ 現在${rainWording}が降っています$suffix"
         RainAlertLevel.Imminent,
         RainAlertLevel.Soon,
         -> {
-            val timing = minutes?.let { "${it}分以内" } ?: "まもなく"
-            if (settings.rainAlertNearbyOnly) {
-                "☔ 周辺で${timing}に雨$suffix"
+            if (settings.rainAlertNearbyOnly && minutes == 0) {
+                "☔ 周辺で現在${rainWording}$suffix"
             } else {
-                "☔ ${timing}に雨$suffix"
+                val timing = when {
+                    minutes == null -> "まもなく"
+                    minutes <= 0 -> "まもなく"
+                    else -> "${minutes}分以内"
+                }
+                if (settings.rainAlertNearbyOnly) {
+                    "☔ 周辺で${timing}に${rainWording}$suffix"
+                } else {
+                    "☔ ${timing}に${rainWording}$suffix"
+                }
             }
         }
         RainAlertLevel.Watch -> {
-            val timing = minutes?.let { "${it}分以内" } ?: "60分以内"
-            "☂ ${timing}に雨の可能性$suffix"
+            val timing = when {
+                minutes == null -> "60分以内"
+                minutes <= 0 -> "まもなく"
+                else -> "${minutes}分以内"
+            }
+            "☂ ${timing}に${rainWording}の可能性$suffix"
         }
         RainAlertLevel.None -> return null
     }
-    return RainAlertDisplay(text = text, level = settings.rainAlertLevel)
+    return RainAlertDisplay(
+        text = text,
+        level = level,
+        isHeavy = rainfallValue != null && rainfallValue >= HEAVY_RAIN_THRESHOLD_MM_PER_HOUR,
+    )
 }
 
 @Composable
 private fun RainAlertBar(display: RainAlertDisplay) {
-    val background = when (display.level) {
-        RainAlertLevel.Raining -> Color(0xFFC62828)
-        RainAlertLevel.Imminent -> Color(0xFFD84315)
-        RainAlertLevel.Soon -> Color(0xFFEF6C00)
-        RainAlertLevel.Watch -> Color(0xFFF9A825)
-        RainAlertLevel.None -> Color.Transparent
+    val background = when {
+        display.isHeavy -> Color(0xFFC62828)
+        display.level == RainAlertLevel.Raining -> Color(0xFFC62828)
+        display.level == RainAlertLevel.Imminent -> Color(0xFFD84315)
+        display.level == RainAlertLevel.Soon -> Color(0xFFEF6C00)
+        display.level == RainAlertLevel.Watch -> Color(0xFFF9A825)
+        else -> Color.Transparent
     }
-    val foreground = if (display.level == RainAlertLevel.Watch) Color(0xFF151515) else Color.White
+    val foreground = if (display.level == RainAlertLevel.Watch && !display.isHeavy) {
+        Color(0xFF151515)
+    } else {
+        Color.White
+    }
     Row(
         modifier = GlanceModifier
             .fillMaxWidth()
@@ -494,7 +524,7 @@ internal fun emptyNewsText(settings: WidgetSettings, now: Long): String {
     if (settings.hasStaleRefreshState(now)) return "\u524D\u56DE\u66F4\u65B0\u304C\u4E2D\u65AD\u3055\u308C\u307E\u3057\u305F"
     if (settings.lastRefreshResult == RefreshResult.Stale) return "\u524D\u56DE\u66F4\u65B0\u304C\u4E2D\u65AD\u3055\u308C\u307E\u3057\u305F"
     if (settings.lastNewsError != null) return "\u30CB\u30E5\u30FC\u30B9\u53D6\u5F97\u5931\u6557"
-    return "\u672A\u53D6\u5F97 / \u21BB\u3067\u66F4\u65B0"
+    return "\u672A\u53D6 / \u21BB\u3067\u66F4\u65B0"
 }
 
 private fun formatUpdatedAt(updatedAtMillis: Long): String {
@@ -522,8 +552,7 @@ class RefreshAction : ActionCallback {
         val appContext = context.applicationContext
         try {
             RefreshWorker.enqueueImmediateByUser(appContext)
-            RainAlertWorker.scheduleFromSettings(appContext)
-            RainAlertWorker.enqueueImmediate(appContext)
+            RainAlertWorker.enqueueImmediateIfConfigured(appContext)
             safeUpdateAll(appContext)
         } catch (error: CancellationException) {
             throw error
@@ -606,10 +635,10 @@ class YWidgetReceiver : GlanceAppWidgetReceiver() {
     override fun onDisabled(context: Context) {
         super.onDisabled(context)
         RefreshWorker.cancelAll(context.applicationContext)
-        RainAlertWorker.cancel(context.applicationContext)
         val pendingResult = goAsync()
         CoroutineScope(Dispatchers.Default).launch {
             try {
+                RainAlertWorker.cancelAndAwait(context.applicationContext)
                 WidgetPreferences(context.applicationContext).clearRefreshState()
                 safeUpdateAll(context.applicationContext)
             } catch (error: CancellationException) {
@@ -640,11 +669,11 @@ class YWidgetReceiver : GlanceAppWidgetReceiver() {
         CoroutineScope(Dispatchers.Default).launch {
             try {
                 RefreshWorker.schedulePeriodicFromSettings(context.applicationContext)
-                RainAlertWorker.scheduleFromSettings(context.applicationContext)
                 if (refreshImmediately) {
                     RefreshWorker.enqueueImmediateByUser(context.applicationContext)
-                    RainAlertWorker.enqueueImmediate(context.applicationContext)
+                    RainAlertWorker.enqueueImmediateIfConfigured(context.applicationContext)
                 } else {
+                    RainAlertWorker.scheduleFromSettings(context.applicationContext)
                     RefreshWorker.enqueueImmediateIfDueFromSettings(context.applicationContext)
                 }
                 safeUpdateAll(context.applicationContext)
