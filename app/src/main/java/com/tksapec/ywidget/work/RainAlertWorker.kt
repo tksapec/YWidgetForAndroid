@@ -79,7 +79,7 @@ class RainAlertWorker(
 
         val settings = preferences.currentSettings()
         if (!isRainAlertConfigured(settings)) {
-            RainAlertExpiryWorker.cancel(applicationContext)
+            cancel(applicationContext)
             preferences.clearRainAlert()
             safeUpdateAll(applicationContext)
             return Result.success()
@@ -87,7 +87,7 @@ class RainAlertWorker(
 
         val clientId = BuildConfig.YAHOO_CLIENT_ID.trim()
         if (clientId.isBlank()) {
-            RainAlertExpiryWorker.cancel(applicationContext)
+            cancel(applicationContext)
             preferences.clearRainAlert(CLIENT_ID_MISSING_MESSAGE)
             safeUpdateAll(applicationContext)
             return Result.success()
@@ -138,7 +138,7 @@ class RainAlertWorker(
             )
             if (savedError) safeUpdateAll(applicationContext)
             if (error is YahooRainHttpException && !isTransientRainFailure(error)) {
-                cancel(applicationContext)
+                cancelPolling(applicationContext)
             }
             if (shouldRetryTransientFailure(isTransientRainFailure(error), runAttemptCount)) {
                 Result.retry()
@@ -350,10 +350,14 @@ class RainAlertWorker(
         }
 
         fun cancel(context: Context) {
+            cancelPolling(context)
+            RainAlertExpiryWorker.cancel(context)
+        }
+
+        private fun cancelPolling(context: Context) {
             val workManager = WorkManager.getInstance(context)
             workManager.cancelUniqueWork(UNIQUE_PERIODIC_WORK)
             workManager.cancelUniqueWork(UNIQUE_IMMEDIATE_WORK)
-            RainAlertExpiryWorker.cancel(context)
         }
 
         suspend fun cancelAndAwait(context: Context) {
