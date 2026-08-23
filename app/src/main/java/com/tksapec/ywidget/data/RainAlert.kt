@@ -10,7 +10,7 @@ internal const val RAIN_CENTER_FORECAST_HORIZON_MINUTES: Int = 60
 internal const val RAIN_NEARBY_FORECAST_HORIZON_MINUTES: Int = 30
 internal const val RAIN_ALERT_MAX_AGE_MILLIS: Long = 45 * 60 * 1_000L
 
-internal enum class RainAlertLevel {
+enum class RainAlertLevel {
     None,
     Watch,
     Soon,
