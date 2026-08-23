@@ -119,6 +119,17 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                         },
+                        onRainAlertEnabledChanged = { enabled ->
+                            lifecycleScope.launch {
+                                preferences.updateRainAlertEnabled(enabled)
+                                if (enabled) {
+                                    RainAlertWorker.enqueueImmediateIfConfigured(this@MainActivity)
+                                } else {
+                                    RainAlertWorker.cancelAndAwait(this@MainActivity)
+                                }
+                                safeUpdateAll(this@MainActivity)
+                            }
+                        },
                         onFixedLocationSaved = { query ->
                             lifecycleScope.launch {
                                 preferences.updateFixedLocationQuery(query)
@@ -168,6 +179,7 @@ private fun SettingsScreen(
     onDisplayStyleSelected: (DisplayStyle) -> Unit,
     onIntervalSelected: (Long) -> Unit,
     onWeatherLocationModeSelected: (WeatherLocationMode) -> Unit,
+    onRainAlertEnabledChanged: (Boolean) -> Unit,
     onFixedLocationSaved: (String) -> Unit,
     onLauncherAppSlotsChanged: (List<LauncherAppSlot>) -> Unit,
     onRefreshStateReset: () -> Unit,
@@ -201,39 +213,39 @@ private fun SettingsScreen(
         verticalArrangement = Arrangement.spacedBy(18.dp),
     ) {
         Text(
-            text = "YWidget \u8A2D\u5B9A",
+            text = "YWidget 設定",
             style = MaterialTheme.typography.titleLarge,
         )
 
-        SettingBlock(label = "\u8868\u793A\u30AB\u30C6\u30B4\u30EA") {
+        SettingBlock(label = "表示カテゴリ") {
             CategorySelector(
                 selected = settings.selectedCategories,
                 onChanged = onCategoriesChanged,
             )
         }
 
-        SettingRow(label = "\u8868\u793A\u30B9\u30BF\u30A4\u30EB") {
+        SettingRow(label = "表示スタイル") {
             DisplayStyleMenu(
                 selected = settings.displayStyle,
                 onSelected = onDisplayStyleSelected,
             )
         }
 
-        SettingRow(label = "\u8868\u793A\u4EF6\u6570") {
+        SettingRow(label = "表示件数") {
             CountMenu(
                 selected = settings.displayCount,
                 onSelected = onDisplayCountSelected,
             )
         }
 
-        SettingRow(label = "\u66F4\u65B0\u9593\u9694") {
+        SettingRow(label = "更新間隔") {
             IntervalMenu(
                 selected = settings.updateIntervalMinutes,
                 onSelected = onIntervalSelected,
             )
         }
 
-        SettingBlock(label = "\u30E9\u30F3\u30C1\u30E3\u30FC\u30DC\u30BF\u30F3") {
+        SettingBlock(label = "ランチャーボタン") {
             LauncherAppSelector(
                 selectedSlots = settings.launcherAppSlots,
                 availableApps = launcherAppOptions,
@@ -241,7 +253,7 @@ private fun SettingsScreen(
             )
         }
 
-        SettingBlock(label = "\u5929\u6C17\u5730\u57DF") {
+        SettingBlock(label = "天気地域") {
             WeatherLocationSelector(
                 selected = settings.weatherLocationMode,
                 locationGranted = locationGranted,
@@ -253,15 +265,31 @@ private fun SettingsScreen(
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
-            if (settings.weatherLocationMode != WeatherLocationMode.Disabled) {
-                Text(
-                    text = "Yahoo!雨予報は約15分間隔で現在地または固定地域の周辺を確認します。",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
         }
 
-        SettingRow(label = "\u4F4D\u7F6E\u60C5\u5831\u6A29\u9650") {
+        SettingBlock(label = "Yahoo!雨予報") {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Checkbox(
+                    checked = settings.rainAlertEnabled,
+                    onCheckedChange = onRainAlertEnabledChanged,
+                    enabled = settings.weatherLocationMode != WeatherLocationMode.Disabled,
+                )
+                Text(if (settings.rainAlertEnabled) "有効" else "無効")
+            }
+            Text(
+                text = if (settings.weatherLocationMode == WeatherLocationMode.Disabled) {
+                    "現在地または固定地域を選択すると有効にできます。"
+                } else {
+                    "有効にすると、約15分間隔で選択地域と周辺8地点の座標をYahoo!気象情報APIへ送信して雨予報を確認します。"
+                },
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+
+        SettingRow(label = "位置情報権限") {
             Button(
                 onClick = {
                     permissionLauncher.launch(
@@ -272,33 +300,33 @@ private fun SettingsScreen(
                     )
                 },
             ) {
-                Text(if (locationGranted) "\u8A31\u53EF\u6E08\u307F" else "\u8A31\u53EF\u3059\u308B")
+                Text(if (locationGranted) "許可済み" else "許可する")
             }
         }
 
-        SettingBlock(label = "\u56FA\u5B9A\u5730\u57DF") {
+        SettingBlock(label = "固定地域") {
             OutlinedTextField(
                 value = fixedLocationInput,
                 onValueChange = { fixedLocationInput = it },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
-                label = { Text("\u4F8B: \u6771\u4EAC\u90FD\u65B0\u5BBF\u533A") },
+                label = { Text("例: 東京都新宿区") },
             )
             Button(
                 onClick = { onFixedLocationSaved(fixedLocationInput) },
                 enabled = fixedLocationInput.isNotBlank(),
             ) {
-                Text("\u4FDD\u5B58\u3057\u3066\u66F4\u65B0")
+                Text("保存して更新")
             }
             settings.locationLabel?.takeIf { it.isNotBlank() }?.let { label ->
                 Text(
-                    text = "\u8868\u793A\u4E2D: $label",
+                    text = "表示中: $label",
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
             settings.lastWeatherError?.takeIf { it.isNotBlank() }?.let { error ->
                 Text(
-                    text = "\u5929\u6C17\u66F4\u65B0\u30A8\u30E9\u30FC: $error",
+                    text = "天気更新エラー: $error",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
                 )
@@ -314,7 +342,7 @@ private fun SettingsScreen(
 
         Spacer(modifier = Modifier.height(8.dp))
         Text(
-            text = "\u66F4\u65B0\u9593\u9694\u306E10\u5206\u306F\u8A2D\u5B9A\u3068\u3057\u3066\u4FDD\u5B58\u3057\u307E\u3059\u304C\u3001Android\u306E\u5236\u7D04\u306B\u3088\u308A\u5B9A\u671F\u5B9F\u884C\u306F15\u5206\u4EE5\u4E0A\u3067\u767B\u9332\u3055\u308C\u307E\u3059\u3002",
+            text = "更新間隔の10分は設定として保存しますが、Androidの制約により定期実行は15分以上で登録されます。雨予報は有効時のみ別の約15分周期で確認します。",
             style = MaterialTheme.typography.bodySmall,
         )
 
@@ -345,8 +373,9 @@ private fun RefreshDiagnostics(settings: WidgetSettings) {
     val rows = listOf(
         "最終ニュース取得" to formatDiagnosticTime(settings.newsUpdatedAtMillis),
         "最終天気取得" to formatDiagnosticTime(settings.weatherUpdatedAtMillis),
+        "雨予報有効" to settings.rainAlertEnabled.toString(),
         "最終雨予報取得" to formatDiagnosticTime(settings.rainAlertUpdatedAtMillis),
-        "雨予報状態" to "${settings.rainAlertLevel.name}, minutes=${settings.rainAlertMinutesUntilRain}, nearby=${settings.rainAlertNearbyOnly}",
+        "雨予報状態" to "${settings.rainAlertLevel.name}, rainAt=${formatDiagnosticTime(settings.rainAlertRainAtMillis ?: 0L)}, nearby=${settings.rainAlertNearbyOnly}",
         "雨予報エラー" to settings.lastRainAlertError.orEmpty().ifBlank { "なし" },
         "最終更新開始" to formatDiagnosticTime(settings.lastRefreshStartedAtMillis),
         "最終更新終了" to formatDiagnosticTime(settings.lastRefreshFinishedAtMillis),
@@ -435,7 +464,7 @@ private fun LauncherAppSelector(
 ) {
     if (availableApps.isEmpty() && selectedSlots.none { it.app != null }) {
         Text(
-            text = "\u8D77\u52D5\u53EF\u80FD\u306A\u30A2\u30D7\u30EA\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093",
+            text = "起動可能なアプリが見つかりません",
             style = MaterialTheme.typography.bodySmall,
         )
         return
@@ -445,7 +474,7 @@ private fun LauncherAppSelector(
     repeat(3) { slotIndex ->
         val selected = selectedSlots.firstOrNull { it.slotIndex == slotIndex }?.app
         val selectedInstalled = selected == null || selected.packageName in installedPackageNames
-        SettingRow(label = "\u30B9\u30ED\u30C3\u30C8${slotIndex + 1}") {
+        SettingRow(label = "スロット${slotIndex + 1}") {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -464,7 +493,7 @@ private fun LauncherAppSelector(
                     onClick = { onChanged(updateLauncherAppSlot(selectedSlots, slotIndex, null)) },
                     enabled = selected != null,
                 ) {
-                    Text("\u89E3\u9664")
+                    Text("解除")
                 }
             }
         }
@@ -490,9 +519,9 @@ private fun LauncherAppMenu(
     OutlinedButton(onClick = { expanded = true }) {
         Text(
             text = when {
-                selected == null -> "\u672A\u767B\u9332"
+                selected == null -> "未登録"
                 selectedInstalled -> selected.displayName
-                else -> "\u672A\u30A4\u30F3\u30B9\u30C8\u30FC\u30EB: ${selected.displayName}"
+                else -> "未インストール: ${selected.displayName}"
             },
             color = if (selectedInstalled) {
                 MaterialTheme.colorScheme.onSurface
@@ -619,12 +648,12 @@ private fun CountMenu(
 ) {
     var expanded by remember { mutableStateOf(false) }
     OutlinedButton(onClick = { expanded = true }) {
-        Text("${selected}\u4EF6")
+        Text("${selected}件")
     }
     DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
         (3..8).forEach { count ->
             DropdownMenuItem(
-                text = { Text("${count}\u4EF6") },
+                text = { Text("${count}件") },
                 onClick = {
                     expanded = false
                     onSelected(count)
@@ -640,12 +669,12 @@ private fun IntervalMenu(
     onSelected: (Long) -> Unit,
 ) {
     val intervals = listOf(
-        10L to "10\u5206",
-        15L to "15\u5206",
-        30L to "30\u5206",
-        60L to "1\u6642\u9593",
+        10L to "10分",
+        15L to "15分",
+        30L to "30分",
+        60L to "1時間",
     )
-    val selectedLabel = intervals.firstOrNull { it.first == selected }?.second ?: "1\u6642\u9593"
+    val selectedLabel = intervals.firstOrNull { it.first == selected }?.second ?: "1時間"
     var expanded by remember { mutableStateOf(false) }
 
     OutlinedButton(onClick = { expanded = true }) {
