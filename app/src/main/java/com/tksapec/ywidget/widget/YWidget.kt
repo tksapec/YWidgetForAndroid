@@ -54,13 +54,13 @@ import com.tksapec.ywidget.data.RefreshResult
 import com.tksapec.ywidget.data.WeatherLocationMode
 import com.tksapec.ywidget.data.WidgetPreferences
 import com.tksapec.ywidget.data.WidgetSettings
+import com.tksapec.ywidget.data.effectiveRainAlertLevel
 import com.tksapec.ywidget.data.hasStaleRefreshState
 import com.tksapec.ywidget.data.isAllowedExternalUrl
+import com.tksapec.ywidget.data.isEffectiveRainAlertFresh
 import com.tksapec.ywidget.data.isNewsRefreshingActive
-import com.tksapec.ywidget.data.isRainAlertFresh
 import com.tksapec.ywidget.data.isRefreshQueuedActive
 import com.tksapec.ywidget.data.isWeatherRefreshingActive
-import com.tksapec.ywidget.data.levelForMinutes
 import com.tksapec.ywidget.data.rainIntensityLabel
 import com.tksapec.ywidget.data.refreshDiagnosticSummary
 import com.tksapec.ywidget.data.remainingRainMinutes
@@ -276,7 +276,26 @@ internal fun rainAlertDisplay(settings: WidgetSettings, now: Long): RainAlertDis
     if (!settings.rainAlertEnabled) return null
     val storedLevel = settings.rainAlertLevel
     if (storedLevel == RainAlertLevel.None) return null
-    if (!isRainAlertFresh(storedLevel, settings.rainAlertUpdatedAtMillis, now)) return null
+
+    val minutes = remainingRainMinutes(settings.rainAlertRainAtMillis, now)
+        ?: settings.rainAlertMinutesUntilRain
+    val effectiveLevel = effectiveRainAlertLevel(
+        storedLevel = storedLevel,
+        rainAtMillis = settings.rainAlertRainAtMillis,
+        fallbackMinutesUntilRain = settings.rainAlertMinutesUntilRain,
+        nowMillis = now,
+    )
+    if (
+        !isEffectiveRainAlertFresh(
+            storedLevel = storedLevel,
+            updatedAtMillis = settings.rainAlertUpdatedAtMillis,
+            rainAtMillis = settings.rainAlertRainAtMillis,
+            fallbackMinutesUntilRain = settings.rainAlertMinutesUntilRain,
+            nowMillis = now,
+        )
+    ) {
+        return null
+    }
 
     val rainfallValue = settings.rainAlertRainfallMmPerHour
     val rainfall = rainfallValue
@@ -284,13 +303,6 @@ internal fun rainAlertDisplay(settings: WidgetSettings, now: Long): RainAlertDis
         .orEmpty()
     val suffix = rainfall.takeIf { it.isNotBlank() }?.let { " $it" }.orEmpty()
     val intensity = rainIntensityLabel(rainfallValue)
-    val minutes = remainingRainMinutes(settings.rainAlertRainAtMillis, now)
-        ?: settings.rainAlertMinutesUntilRain
-    val effectiveLevel = if (storedLevel == RainAlertLevel.Raining) {
-        RainAlertLevel.Raining
-    } else {
-        minutes?.let(::levelForMinutes) ?: storedLevel
-    }
     val rainWording = intensity ?: "雨"
     val text = when (effectiveLevel) {
         RainAlertLevel.Raining -> "☔ 現在${rainWording}が降っています$suffix"
