@@ -31,7 +31,7 @@ class RainAlertWorkerTest {
     }
 
     @Test
-    fun currentTargetPrefersFreshLiveLocation() {
+    fun currentTargetPrefersNewerLiveLocation() {
         val settings = rainSettings(
             weatherLocationMode = WeatherLocationMode.Current,
             lastCurrentLatitude = 34.0,
@@ -40,7 +40,23 @@ class RainAlertWorkerTest {
         )
         val live = RainTarget(35.0, 135.0, locationAtMillis = 11_000L)
 
-        assertEquals(live, selectRainTarget(settings, currentTarget = live, now = 10_000L))
+        assertEquals(live, selectRainTarget(settings, currentTarget = live, now = 12_000L))
+    }
+
+    @Test
+    fun currentTargetPrefersNewerCachedLocationOverOlderLiveResult() {
+        val settings = rainSettings(
+            weatherLocationMode = WeatherLocationMode.Current,
+            lastCurrentLatitude = 34.0,
+            lastCurrentLongitude = 134.0,
+            lastCurrentLocationAtMillis = 10_000L,
+        )
+        val olderLive = RainTarget(35.0, 135.0, locationAtMillis = 9_000L)
+
+        assertEquals(
+            RainTarget(34.0, 134.0, 10_000L),
+            selectRainTarget(settings, currentTarget = olderLive, now = 12_000L),
+        )
     }
 
     @Test
