@@ -39,18 +39,27 @@ import java.net.UnknownHostException
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+
+internal val rainAlertExecutionMutex = Mutex()
 
 class RainAlertWorker(
     appContext: Context,
     params: WorkerParameters,
 ) : CoroutineWorker(appContext, params) {
-    override suspend fun doWork(): Result {
+    override suspend fun doWork(): Result = rainAlertExecutionMutex.withLock {
+        doWorkSerialized()
+    }
+
+    private suspend fun doWorkSerialized(): Result {
         val preferences = WidgetPreferences(applicationContext)
         val clientId = BuildConfig.YAHOO_CLIENT_ID.trim()
         if (clientId.isBlank()) {
+            RainAlertExpiryWorker.cancel(applicationContext)
             preferences.clearRainAlert(CLIENT_ID_MISSING_MESSAGE)
             safeUpdateAll(applicationContext)
             return Result.success()
@@ -58,6 +67,7 @@ class RainAlertWorker(
 
         val settings = preferences.currentSettings()
         if (!isRainAlertConfigured(settings)) {
+            RainAlertExpiryWorker.cancel(applicationContext)
             preferences.clearRainAlert()
             safeUpdateAll(applicationContext)
             return Result.success()
@@ -75,6 +85,7 @@ class RainAlertWorker(
                 now = System.currentTimeMillis(),
             )
             if (target == null) {
+                RainAlertExpiryWorker.cancel(applicationContext)
                 preferences.clearRainAlert(LOCATION_UNAVAILABLE_MESSAGE)
                 safeUpdateAll(applicationContext)
                 return Result.success()
@@ -90,6 +101,11 @@ class RainAlertWorker(
                 evaluatedAtMillis = evaluatedAt,
             )
             preferences.saveRainAlert(alert)
+            if (alert.isActive) {
+                RainAlertExpiryWorker.schedule(applicationContext, alert.updatedAtMillis)
+            } else {
+                RainAlertExpiryWorker.cancel(applicationContext)
+            }
             safeUpdateAll(applicationContext)
             Result.success()
         } catch (error: CancellationException) {
@@ -234,6 +250,7 @@ class RainAlertWorker(
             val workManager = WorkManager.getInstance(context)
             workManager.cancelUniqueWork(UNIQUE_PERIODIC_WORK)
             workManager.cancelUniqueWork(UNIQUE_IMMEDIATE_WORK)
+            RainAlertExpiryWorker.cancel(context)
         }
 
         private fun networkConstraints(): Constraints = Constraints.Builder()
