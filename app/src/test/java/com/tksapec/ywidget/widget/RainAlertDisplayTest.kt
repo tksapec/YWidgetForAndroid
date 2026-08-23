@@ -16,6 +16,19 @@ class RainAlertDisplayTest {
     }
 
     @Test
+    fun disabledRainAlertNeverShowsStoredBanner() {
+        val stored = settings(
+            level = RainAlertLevel.Raining,
+            minutes = 0,
+            rainfall = 3.0,
+            updatedAt = 10_000L,
+            rainAt = 10_000L,
+        ).copy(rainAlertEnabled = false)
+
+        assertNull(rainAlertDisplay(stored, now = 10_000L))
+    }
+
+    @Test
     fun staleRainingAlertProducesNoBannerAfterFifteenMinutes() {
         val settings = settings(
             level = RainAlertLevel.Raining,
@@ -64,6 +77,25 @@ class RainAlertDisplayTest {
     }
 
     @Test
+    fun storedWatchEscalatesToImminentAsRainApproaches() {
+        val updatedAt = 10_000L
+        val rainAt = updatedAt + 50 * 60_000L
+        val display = rainAlertDisplay(
+            settings(
+                level = RainAlertLevel.Watch,
+                minutes = 50,
+                rainfall = 1.2,
+                updatedAt = updatedAt,
+                rainAt = rainAt,
+            ),
+            now = rainAt - 10 * 60_000L,
+        )!!
+
+        assertEquals(RainAlertLevel.Imminent, display.level)
+        assertEquals("☔ 10分以内に雨 1.2 mm/h", display.text)
+    }
+
+    @Test
     fun nearbyRainAtCurrentTimeSaysCurrentlyRainingNearby() {
         val now = 10_000L
         val display = rainAlertDisplay(
@@ -95,6 +127,7 @@ class RainAlertDisplayTest {
             now = now,
         )!!
 
+        assertEquals(RainAlertLevel.Watch, display.level)
         assertTrue(display.text.contains("60分以内に雨の可能性"))
         assertFalse(display.isHeavy)
     }
@@ -125,6 +158,7 @@ class RainAlertDisplayTest {
         updatedAt: Long,
         rainAt: Long? = null,
     ) = WidgetSettings(
+        rainAlertEnabled = true,
         rainAlertLevel = level,
         rainAlertMinutesUntilRain = minutes,
         rainAlertRainAtMillis = rainAt,
