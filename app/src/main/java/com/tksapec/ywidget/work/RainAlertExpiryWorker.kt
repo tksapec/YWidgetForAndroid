@@ -11,8 +11,8 @@ import com.tksapec.ywidget.data.RainAlertLevel
 import com.tksapec.ywidget.data.RainAlertState
 import com.tksapec.ywidget.data.WidgetPreferences
 import com.tksapec.ywidget.data.WidgetSettings
-import com.tksapec.ywidget.data.isRainAlertFresh
-import com.tksapec.ywidget.data.rainAlertMaxAgeMillis
+import com.tksapec.ywidget.data.isEffectiveRainAlertFresh
+import com.tksapec.ywidget.data.rainAlertExpiryAtMillis
 import com.tksapec.ywidget.widget.safeUpdateAll
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.sync.withLock
@@ -45,14 +45,15 @@ class RainAlertExpiryWorker(
         private const val UPDATED_AT_INPUT_KEY = "rain_alert_updated_at_millis"
 
         fun schedule(context: Context, alert: RainAlertState) {
-            val maxAgeMillis = rainAlertMaxAgeMillis(alert.level)
-            if (maxAgeMillis <= 0L) {
+            val expiryAtMillis = rainAlertExpiryAtMillis(alert)
+            if (expiryAtMillis == null) {
                 cancel(context)
                 return
             }
+            val delayMillis = (expiryAtMillis - System.currentTimeMillis()).coerceAtLeast(0L)
             val request = OneTimeWorkRequestBuilder<RainAlertExpiryWorker>()
                 .setInputData(workDataOf(UPDATED_AT_INPUT_KEY to alert.updatedAtMillis))
-                .setInitialDelay(maxAgeMillis + 1_000L, TimeUnit.MILLISECONDS)
+                .setInitialDelay(delayMillis, TimeUnit.MILLISECONDS)
                 .build()
             WorkManager.getInstance(context).enqueueUniqueWork(
                 UNIQUE_EXPIRY_WORK,
@@ -74,9 +75,11 @@ internal fun shouldExpireRainAlert(
 ): Boolean {
     return settings.rainAlertLevel != RainAlertLevel.None &&
         settings.rainAlertUpdatedAtMillis == expectedUpdatedAtMillis &&
-        !isRainAlertFresh(
-            level = settings.rainAlertLevel,
+        !isEffectiveRainAlertFresh(
+            storedLevel = settings.rainAlertLevel,
             updatedAtMillis = settings.rainAlertUpdatedAtMillis,
+            rainAtMillis = settings.rainAlertRainAtMillis,
+            fallbackMinutesUntilRain = settings.rainAlertMinutesUntilRain,
             nowMillis = nowMillis,
         )
 }
