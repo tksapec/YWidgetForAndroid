@@ -6,3 +6,11 @@ local.properties
 *.iml
 
 app/build/
+
+# Local distribution artifacts
+*.apk
+*.aab
+
+# Signing material must stay local
+*.keystore
+*.jks
