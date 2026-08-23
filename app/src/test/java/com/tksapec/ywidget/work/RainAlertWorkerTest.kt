@@ -17,6 +17,7 @@ class RainAlertWorkerTest {
         val settings = WidgetSettings(
             weatherEnabled = true,
             weatherLocationMode = WeatherLocationMode.Fixed,
+            fixedLocationQuery = "大阪市",
             fixedLatitude = 35.0,
             fixedLongitude = 135.0,
         )
@@ -64,6 +65,45 @@ class RainAlertWorkerTest {
         )
 
         assertNull(selectRainTarget(settings, currentTarget = null, now = 10_000L))
+    }
+
+    @Test
+    fun fixedSourceKeyIsStableWhileCoordinatesAreBeingResolved() {
+        val unresolved = WidgetSettings(
+            weatherEnabled = true,
+            weatherLocationMode = WeatherLocationMode.Fixed,
+            fixedLocationQuery = "大阪市",
+        )
+        val resolved = unresolved.copy(
+            fixedLatitude = 34.6937,
+            fixedLongitude = 135.5023,
+        )
+
+        assertEquals(rainSourceKey(unresolved), rainSourceKey(resolved))
+    }
+
+    @Test
+    fun changingFixedQueryChangesRainSourceKey() {
+        val before = WidgetSettings(
+            weatherEnabled = true,
+            weatherLocationMode = WeatherLocationMode.Fixed,
+            fixedLocationQuery = "大阪市",
+        )
+        val after = before.copy(fixedLocationQuery = "神戸市")
+
+        assertTrue(rainSourceKey(before) != rainSourceKey(after))
+    }
+
+    @Test
+    fun changingLocationModeChangesRainSourceKey() {
+        val fixed = WidgetSettings(
+            weatherEnabled = true,
+            weatherLocationMode = WeatherLocationMode.Fixed,
+            fixedLocationQuery = "大阪市",
+        )
+        val current = fixed.copy(weatherLocationMode = WeatherLocationMode.Current)
+
+        assertTrue(rainSourceKey(fixed) != rainSourceKey(current))
     }
 
     @Test
