@@ -30,6 +30,14 @@ class YahooRainClientValidationTest {
     }
 
     @Test(expected = YahooRainParseException::class)
+    fun rejectsResponseMissingAnyRequestedProbe() {
+        YahooRainClient("client-id").parseRainObservations(
+            response(feature("135.000000,35.000000", observation = true)),
+            points,
+        )
+    }
+
+    @Test(expected = YahooRainParseException::class)
     fun rejectsDuplicateFeaturesForSameProbe() {
         YahooRainClient("client-id").parseRainObservations(
             response(
