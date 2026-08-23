@@ -138,6 +138,10 @@ internal class YahooRainClient(private val clientId: String) {
             }
         }
 
+        val expectedProbeIds = points.map { it.id }.toSet()
+        if (usedProbeIds != expectedProbeIds) {
+            throw YahooRainParseException("Yahoo rain response is missing requested coordinates")
+        }
         if (observations.isEmpty()) {
             throw YahooRainParseException("Yahoo rain response contains no rainfall observations")
         }
