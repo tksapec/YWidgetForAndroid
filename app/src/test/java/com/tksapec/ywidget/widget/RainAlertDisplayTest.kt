@@ -115,7 +115,7 @@ class RainAlertDisplayTest {
     }
 
     @Test
-    fun nearbyRainAtCurrentTimeSaysCurrentlyRainingNearby() {
+    fun nearbyForecastAtItsPredictedTimeSaysSoonRatherThanCurrentRain() {
         val now = 10_000L
         val display = rainAlertDisplay(
             settings(
@@ -129,7 +129,7 @@ class RainAlertDisplayTest {
             now = now,
         )!!
 
-        assertEquals("☔ 周辺で現在雨 1.5 mm/h", display.text)
+        assertEquals("☔ 周辺でまもなくに雨 1.5 mm/h", display.text)
     }
 
     @Test
