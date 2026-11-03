@@ -62,7 +62,7 @@ Windows:
 release APK:
 
 ```text
-app\build\outputs\apk\release\app-release.apk
+app\build\outputs\versioned-apk\release\YWidget-v1.2.apk
 ```
 
 現在の`release` variantは、内部・個人配布用としてAndroid標準のdebug signing configurationで署名します。R8による縮小・難読化は無効です。
@@ -72,7 +72,7 @@ app\build\outputs\apk\release\app-release.apk
 ## 実機へのインストール
 
 ```powershell
-adb install -r .\app\build\outputs\apk\release\app-release.apk
+adb install -r .\app\build\outputs\versioned-apk\release\YWidget-v1.2.apk
 ```
 
 署名が一致しないAPKから更新する場合は上書きできません。アンインストールするとアプリ設定と配置済みウィジェットが削除されるため、必要な場合だけ実施してください。

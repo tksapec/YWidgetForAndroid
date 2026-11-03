@@ -43,6 +43,19 @@ android {
     }
 }
 
+val copyVersionedReleaseApk = tasks.register<Copy>("copyVersionedReleaseApk") {
+    dependsOn("packageRelease")
+    from(layout.buildDirectory.file("outputs/apk/release/app-release.apk"))
+    into(layout.buildDirectory.dir("outputs/versioned-apk/release"))
+    rename { "YWidget-v${android.defaultConfig.versionName}.apk" }
+}
+
+tasks.configureEach {
+    if (name == "assembleRelease") {
+        finalizedBy(copyVersionedReleaseApk)
+    }
+}
+
 dependencies {
     implementation("androidx.activity:activity-compose:1.9.3")
     implementation("androidx.compose.material3:material3:1.3.1")

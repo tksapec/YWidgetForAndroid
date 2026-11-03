@@ -81,13 +81,13 @@ git log -5 --oneline
 生成物:
 
 ```text
-app\build\outputs\apk\release\app-release.apk
+app\build\outputs\versioned-apk\release\YWidget-v1.2.apk
 ```
 
 PowerShellで確認:
 
 ```powershell
-Get-Item .\app\build\outputs\apk\release\app-release.apk |
+Get-Item .\app\build\outputs\versioned-apk\release\YWidget-v1.2.apk |
     Format-List FullName,Length,LastWriteTime
 ```
 
@@ -95,7 +95,7 @@ Get-Item .\app\build\outputs\apk\release\app-release.apk |
 
 ```powershell
 Copy-Item `
-  .\app\build\outputs\apk\release\app-release.apk `
+  .\app\build\outputs\versioned-apk\release\YWidget-v1.2.apk `
   .\YWidget-v1.2.apk
 ```
 
@@ -110,7 +110,7 @@ adb devices -l
 上書きインストール:
 
 ```powershell
-adb install -r .\app\build\outputs\apk\release\app-release.apk
+adb install -r .\app\build\outputs\versioned-apk\release\YWidget-v1.2.apk
 ```
 
 `Success`になることを確認します。
@@ -123,7 +123,7 @@ adb install -r .\app\build\outputs\apk\release\app-release.apk
 
 ```powershell
 adb uninstall com.tksapec.ywidget
-adb install .\app\build\outputs\apk\release\app-release.apk
+adb install .\app\build\outputs\versioned-apk\release\YWidget-v1.2.apk
 ```
 
 ## 7. バージョン確認
