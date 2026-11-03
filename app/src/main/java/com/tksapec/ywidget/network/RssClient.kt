@@ -17,6 +17,10 @@ class RssClient(
 ) {
     fun fetch(category: NewsCategory): List<NewsItem> {
         val connection = URL(category.rssUrl).openConnection() as HttpURLConnection
+        return fetch(category, connection)
+    }
+
+    internal fun fetch(category: NewsCategory, connection: HttpURLConnection): List<NewsItem> {
         connection.connectTimeout = 10_000
         connection.readTimeout = 10_000
         connection.requestMethod = "GET"

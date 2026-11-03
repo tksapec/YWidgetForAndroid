@@ -25,6 +25,17 @@ class WidgetSettingsTest {
     }
 
     @Test
+    fun refreshDueWhenPeriodicTickFollowsIntervalButFetchCompletedAfterPreviousTick() {
+        val settings = WidgetSettings(
+            updateIntervalMinutes = 60L,
+            newsUpdatedAtMillis = 10_000L,
+            lastRefreshStartedAtMillis = 1L,
+        )
+
+        assertTrue(settings.isRefreshDue(now = 3_600_001L, scheduledTick = true))
+    }
+
+    @Test
     fun refreshDueWhenNewsTimestampIsInFutureAfterClockRollback() {
         val settings = WidgetSettings(
             updateIntervalMinutes = 60L,

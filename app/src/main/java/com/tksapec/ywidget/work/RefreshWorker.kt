@@ -111,7 +111,9 @@ class RefreshWorker(
                                     try {
                                         kotlin.Result.success(
                                             withTimeoutOrNull(NEWS_CATEGORY_TIMEOUT_MILLIS) {
-                                                rssClient.fetch(category)
+                                                kotlinx.coroutines.runInterruptible(Dispatchers.IO) {
+                                                    rssClient.fetch(category)
+                                                }
                                             } ?: throw SocketTimeoutException(
                                                 "RSS category timeout: ${category.name}",
                                             ),
@@ -172,7 +174,9 @@ class RefreshWorker(
                             expectedGeneration = expectedGeneration,
                         )
                         try {
-                            val weather = WeatherClient().fetch(target.latitude, target.longitude)
+                            val weather = kotlinx.coroutines.runInterruptible(Dispatchers.IO) {
+                                WeatherClient().fetch(target.latitude, target.longitude)
+                            }
                             preferences.saveWeather(
                                 code = weather.code,
                                 temperatureCelsius = weather.temperatureCelsius,
@@ -516,7 +520,11 @@ class RefreshWorker(
                 .setInputData(workDataOf(REFRESH_GENERATION_INPUT_KEY to refreshGeneration))
                 .setConstraints(networkConstraints())
                 .setBackoffCriteria(BackoffPolicy.LINEAR, BACKOFF_MINUTES, TimeUnit.MINUTES)
-                .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+                .apply {
+                    if (shouldRequestExpeditedWork(android.os.Build.VERSION.SDK_INT)) {
+                        setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+                    }
+                }
                 .build()
             WorkManager.getInstance(context).enqueueUniqueWork(
                 UNIQUE_REFRESH_WORK,
@@ -587,6 +595,9 @@ class RefreshWorker(
         }
     }
 }
+
+internal fun shouldRequestExpeditedWork(sdkInt: Int): Boolean =
+    sdkInt >= android.os.Build.VERSION_CODES.S
 
 internal suspend fun prepareRefreshWork(
     markRunning: suspend () -> Boolean,

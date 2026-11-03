@@ -139,16 +139,23 @@ fun summarizeNewsFetchResults(results: List<Result<List<NewsItem>>>): NewsFetchS
     )
 }
 
-fun WidgetSettings.isRefreshDue(now: Long): Boolean {
-    val intervalMillis = updateIntervalMinutes.coerceAtLeast(1L) * 60_000L
+fun WidgetSettings.isRefreshDue(now: Long): Boolean = isRefreshDue(now, scheduledTick = false)
+
+internal fun WidgetSettings.isRefreshDue(now: Long, scheduledTick: Boolean): Boolean {
+    if (scheduledTick && (refreshQueued || newsRefreshing || weatherRefreshing)) return false
+    val intervalMillis = updateIntervalMinutes.coerceAtLeast(1L).coerceAtMost(Long.MAX_VALUE / 60_000L) * 60_000L
+    val scheduledIntervalDue = scheduledTick && lastRefreshStartedAtMillis > 0L &&
+        now >= lastRefreshStartedAtMillis && now - lastRefreshStartedAtMillis >= intervalMillis
     val newsDue = newsUpdatedAtMillis <= 0L ||
         newsUpdatedAtMillis > now ||
+        scheduledIntervalDue ||
         now - newsUpdatedAtMillis >= intervalMillis
     val weatherDue = weatherEnabled &&
         weatherLocationMode != WeatherLocationMode.Disabled &&
         (
             weatherUpdatedAtMillis <= 0L ||
                 weatherUpdatedAtMillis > now ||
+                scheduledIntervalDue ||
                 now - weatherUpdatedAtMillis >= intervalMillis
             )
     return newsDue || weatherDue

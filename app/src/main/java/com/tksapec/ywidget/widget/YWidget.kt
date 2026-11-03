@@ -67,15 +67,13 @@ import com.tksapec.ywidget.data.remainingRainMinutes
 import com.tksapec.ywidget.data.weatherIconForCode
 import com.tksapec.ywidget.work.RainAlertWorker
 import com.tksapec.ywidget.work.RefreshWorker
+import com.tksapec.ywidget.work.WidgetRefreshSetupWorker
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 
 class YWidget : GlanceAppWidget() {
     override val sizeMode: SizeMode = SizeMode.Exact
@@ -625,7 +623,7 @@ class YWidgetReceiver : GlanceAppWidgetReceiver() {
 
     override fun onEnabled(context: Context) {
         super.onEnabled(context)
-        runWidgetRefreshSetup(context, refreshImmediately = true)
+        WidgetRefreshSetupWorker.enqueue(context, refreshImmediately = true)
     }
 
     override fun onUpdate(
@@ -634,64 +632,32 @@ class YWidgetReceiver : GlanceAppWidgetReceiver() {
         appWidgetIds: IntArray,
     ) {
         super.onUpdate(context, appWidgetManager, appWidgetIds)
-        runWidgetRefreshSetup(context, refreshImmediately = false)
+        WidgetRefreshSetupWorker.enqueue(context, refreshImmediately = false)
     }
 
     override fun onDisabled(context: Context) {
         super.onDisabled(context)
         RefreshWorker.cancelAll(context.applicationContext)
-        val pendingResult = goAsync()
-        CoroutineScope(Dispatchers.Default).launch {
-            try {
-                RainAlertWorker.cancelAndAwait(context.applicationContext)
-                WidgetPreferences(context.applicationContext).clearRefreshState()
-                safeUpdateAll(context.applicationContext)
-            } catch (error: CancellationException) {
-                throw error
-            } catch (error: Exception) {
-                Log.w("YWidgetReceiver", "Failed to clear disabled widget state", error)
-            } finally {
-                pendingResult.finish()
-            }
-        }
+        WidgetRefreshSetupWorker.enqueue(context, refreshImmediately = false, widgetsDisabled = true)
     }
 
     override fun onReceive(context: Context, intent: Intent) {
         super.onReceive(context, intent)
-        when (intent.action) {
-            Intent.ACTION_BOOT_COMPLETED,
-            Intent.ACTION_MY_PACKAGE_REPLACED,
-            Intent.ACTION_TIME_CHANGED,
-            Intent.ACTION_TIMEZONE_CHANGED,
-            -> runWidgetRefreshSetup(context, refreshImmediately = false)
+        if (shouldRunWidgetRefreshSetup(intent.action)) {
+            WidgetRefreshSetupWorker.enqueue(context, refreshImmediately = false)
         }
     }
+}
 
-    private fun runWidgetRefreshSetup(context: Context, refreshImmediately: Boolean) {
-        if (!context.hasPlacedWidgets()) return
-
-        val pendingResult = goAsync()
-        CoroutineScope(Dispatchers.Default).launch {
-            try {
-                RefreshWorker.schedulePeriodicFromSettings(context.applicationContext)
-                if (refreshImmediately) {
-                    RefreshWorker.enqueueImmediateByUser(context.applicationContext)
-                    RainAlertWorker.enqueueImmediateIfConfigured(context.applicationContext)
-                } else {
-                    RainAlertWorker.scheduleFromSettings(context.applicationContext)
-                    RefreshWorker.enqueueImmediateIfDueFromSettings(context.applicationContext)
-                }
-                safeUpdateAll(context.applicationContext)
-            } catch (error: CancellationException) {
-                throw error
-            } catch (error: Exception) {
-                Log.w("YWidgetReceiver", "Failed to configure widget refresh", error)
-                safeUpdateAll(context.applicationContext)
-            } finally {
-                pendingResult.finish()
-            }
-        }
-    }
+internal fun shouldRunWidgetRefreshSetup(action: String?): Boolean = when (action) {
+    "android.appwidget.action.APPWIDGET_ENABLED",
+    "android.appwidget.action.APPWIDGET_UPDATE",
+    Intent.ACTION_BOOT_COMPLETED,
+    Intent.ACTION_MY_PACKAGE_REPLACED,
+    Intent.ACTION_TIME_CHANGED,
+    Intent.ACTION_TIMEZONE_CHANGED,
+    -> true
+    else -> false
 }
 
 private fun Context.hasPlacedWidgets(): Boolean {

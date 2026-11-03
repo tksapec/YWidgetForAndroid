@@ -13,7 +13,7 @@ class RefreshTriggerWorker(
 ) : CoroutineWorker(appContext, params) {
     override suspend fun doWork(): Result {
         val settings = WidgetPreferences(applicationContext).currentSettings()
-        if (!settings.isRefreshDue(System.currentTimeMillis())) return Result.success()
+        if (!settings.isRefreshDue(System.currentTimeMillis(), scheduledTick = true)) return Result.success()
 
         return try {
             RefreshWorker.enqueueImmediateIfDueFromSettings(applicationContext)

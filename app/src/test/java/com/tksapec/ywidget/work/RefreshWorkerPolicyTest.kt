@@ -5,6 +5,8 @@ import com.tksapec.ywidget.data.NewsItem
 import com.tksapec.ywidget.data.REFRESH_ACTIVE_TIMEOUT_MILLIS
 import com.tksapec.ywidget.data.RefreshResult
 import com.tksapec.ywidget.data.WidgetSettings
+import com.tksapec.ywidget.data.isRefreshDue
+import com.tksapec.ywidget.work.shouldRunWidgetRefreshSetup
 import com.tksapec.ywidget.network.EmptyRssException
 import com.tksapec.ywidget.network.RssHttpException
 import com.tksapec.ywidget.network.RssParseException
@@ -16,6 +18,18 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RefreshWorkerPolicyTest {
+    @Test
+    fun receiverSetupRunsOnlyForWidgetAndLifecycleBroadcasts() {
+        assertTrue(shouldRunWidgetRefreshSetup("android.appwidget.action.APPWIDGET_ENABLED"))
+        assertTrue(shouldRunWidgetRefreshSetup(android.appwidget.AppWidgetManager.ACTION_APPWIDGET_UPDATE))
+        assertTrue(shouldRunWidgetRefreshSetup(android.content.Intent.ACTION_BOOT_COMPLETED))
+        assertTrue(shouldRunWidgetRefreshSetup(android.content.Intent.ACTION_MY_PACKAGE_REPLACED))
+        assertTrue(shouldRunWidgetRefreshSetup(android.content.Intent.ACTION_TIME_CHANGED))
+        assertTrue(shouldRunWidgetRefreshSetup(android.content.Intent.ACTION_TIMEZONE_CHANGED))
+        assertFalse(shouldRunWidgetRefreshSetup(android.content.Intent.ACTION_MAIN))
+        assertFalse(shouldRunWidgetRefreshSetup("unrelated.action"))
+    }
+
     @Test
     fun refreshWorkStartSchedulesCleanupAfterRunningState() = runBlocking {
         val calls = mutableListOf<String>()
@@ -126,6 +140,26 @@ class RefreshWorkerPolicyTest {
 
         assertTrue(result)
         assertEquals(listOf("finish", "read", "redraw"), calls)
+    }
+
+    @Test
+    fun scheduledTickDoesNotRepeatWhileARefreshIsQueuedOrRunning() {
+        val queued = WidgetSettings(
+            updateIntervalMinutes = 60L,
+            newsUpdatedAtMillis = 10_000L,
+            refreshQueued = true,
+            lastRefreshStartedAtMillis = 1L,
+        )
+        val running = queued.copy(refreshQueued = false, newsRefreshing = true)
+
+        assertFalse(queued.isRefreshDue(3_600_001L, scheduledTick = true))
+        assertFalse(running.isRefreshDue(3_600_001L, scheduledTick = true))
+    }
+
+    @Test
+    fun immediateRefreshIsNotExpeditedOnPreAndroid12() {
+        assertFalse(shouldRequestExpeditedWork(30))
+        assertTrue(shouldRequestExpeditedWork(31))
     }
 
     @Test
